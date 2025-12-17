@@ -1,0 +1,4 @@
+{
+  "Collectors": ["Processes", "Network", "Users", "EventLogs"],
+  "EventLogHours": 48
+}

@@ -1,0 +1,140 @@
+TOPIC
+    about_Forensikit
+
+SHORT DESCRIPTION
+  Forensikit is a PowerShell evidence collection toolkit for incident response. It collects volatile and
+  persistent data, writes integrity hashes, and compresses results for transport. It can run locally and
+  remotely (WinRM on Windows; SSH in PowerShell 7+).
+
+LONG DESCRIPTION
+    Forensikit ships as a module with a single public entrypoint: Invoke-ForensicCollector.
+    It orchestrates collectors (processes, network, users, event logs), logging, integrity hashing,
+    compression, and optional remoting fan-out. Output is structured for ingestion and audit.
+
+    Key behaviors
+      - Creates a run folder per execution: yyyyMMdd_HHmmssZ[ _CaseId ]\<ComputerName>
+      - Captures volatile and persistent artifacts into subfolders (volatile/*, persistent/*).
+      - Generates collector.log (INFO/WARN/ERROR) and run.json (metadata).
+      - Produces integrity.csv (SHA256 per collected file) and a ZIP archive of the run folder.
+      - Remote mode copies the module to the remote temp directory, runs locally there, then pulls back the ZIP.
+
+SYNTAX
+  Invoke-ForensicCollector -Mode <Quick|Full|Deep|Custom> [-OutputPath <path>] [-CaseId <string>]
+                [-ComputerName <string[]>] [-HostName <string[]>] [-UserName <string>] [-KeyFilePath <path>]
+                [-ComputerListCsv <path>] [-Credential <pscredential>] [-ThrottleLimit <int>]
+                [-CustomProfilePath <path>] [-UseParallel] [-SiemFormat <None|Ndjson>] [-MergeSiem <bool>] [-WhatIf] [-Confirm]
+
+PARAMETERS (high level)
+  Mode              Quick, Full, Deep, or Custom profile. Custom requires -CustomProfilePath JSON.
+    OutputPath        Base folder for runs. A time-stamped subfolder is created per target.
+    CaseId            Optional string appended to run/zip names (e.g., incident ID).
+  ComputerName      Remote Windows computers for WinRM-based PowerShell Remoting collection.
+  HostName          PowerShell 7+ only: SSH remoting targets (Linux/macOS/Windows with SSH).
+  UserName          PowerShell 7+ only: SSH user name for -HostName remoting.
+  KeyFilePath       PowerShell 7+ only: SSH private key path for -HostName remoting.
+    ComputerListCsv   CSV for fan-out; supports mixed OS targets (ComputerName/HostName/OS/Transport).
+    Credential        Credential for remoting; defaults to current user when omitted.
+    ThrottleLimit     Max concurrency for remote fan-out (sequential loop and -UseParallel).
+    CustomProfilePath JSON profile containing Collectors (array) and optional EventLogHours.
+    UseParallel       Use ForEach-Object -Parallel (requires PowerShell 7+) for remote fan-out.
+    SiemFormat        Optional SIEM-oriented output format.
+             - None: do not write SIEM outputs.
+             - Ndjson: write per-host NDJSON/JSONL at <OutputPath>\<RunId>\<ComputerName>\siem\events.ndjson.
+    MergeSiem         When SiemFormat is Ndjson, also write a merged NDJSON file for multi-host runs:
+             <OutputPath>\<RunId>\siem\merged.ndjson (default: true).
+
+MODES AND PROFILES
+    Quick: Collectors = Processes, Network, Users, EventLogs; EventLogHours = 24.
+    Full:  Collectors = Processes, Network, Users, EventLogs; EventLogHours = 168 (7 days).
+  Deep:  Quick/Full plus services/drivers, scheduled tasks/cron, persistence/autoruns, installed software,
+       DNS/firewall data; EventLogHours = 336 (14 days).
+    Custom: load JSON, e.g.:
+      {
+        "Collectors": ["Processes", "Network", "Users", "EventLogs"],
+        "EventLogHours": 48
+      }
+
+CSV FORMAT (MIXED OS)
+    Supported columns:
+      - ComputerName (WinRM target)
+      - HostName (SSH target)
+      - OS: Windows | Linux | macOS | Auto
+      - Transport: WinRM | SSH | Auto
+    See examples/targets.csv.
+
+OUTPUT STRUCTURE
+    <OutputPath>\<RunId>\<ComputerName>\
+      volatile/processes/...
+      volatile/network/...
+      persistent/users/...
+      persistent/eventlogs/...
+      persistent/services/...
+      persistent/tasks/...
+      persistent/registry/...
+      persistent/software/...
+      persistent/network/...
+      siem/events.ndjson (optional; when -SiemFormat Ndjson)
+      logs/collector.log
+      run.json (metadata), integrity.csv (SHA256), plus a ZIP alongside the run folder
+
+    When collecting multiple hosts with -SiemFormat Ndjson, Forensikit also writes:
+      <OutputPath>\<RunId>\siem\merged.ndjson
+
+PERMISSIONS & PREREQS
+  - PowerShell 7+ recommended for cross-platform. Windows PowerShell 5.1 is supported on Windows only.
+  - Remoting (WinRM): ensure WinRM/PowerShell Remoting is enabled and accessible.
+  - Remoting (SSH, PowerShell 7+): ensure SSH is reachable and PowerShell is installed on the target (pwsh).
+    - Event Logs: Security log often needs elevation; failures are logged as WARN and collection continues.
+
+PERMISSIONS QUICK GUIDE
+    General
+      - Always required: write access to the chosen OutputPath.
+      - Many artifacts are best-effort; failures are logged and collection continues.
+
+    Windows
+      - Security Event Log: typically requires admin or Event Log Readers rights.
+      - Scheduled tasks / firewall rules / some driver inventory: may require admin.
+      - Process/network details: standard user often works; full fidelity may require admin.
+
+    Linux
+      - journalctl and /var/log/*: often requires root or membership in an admin/log-reading group.
+      - Firewall rules (iptables/nft) and some socket ownership details: often requires root.
+
+    macOS
+      - Unified logging (log show) and service visibility (launchctl): may require sudo depending on scope.
+
+AUTHENTICATION QUICK GUIDE
+    WinRM (Windows targets)
+      - Uses New-PSSession -ComputerName; auth is handled by WinRM (often Kerberos/NTLM).
+      - Supply -Credential or run under a user with remoting rights.
+
+    SSH (Linux/macOS targets, PowerShell 7+)
+      - Uses New-PSSession -HostName -UserName -KeyFilePath.
+      - Prefer passphrase-protected keys stored in ~/.ssh and never commit keys to source control.
+
+EXAMPLES
+    Local quick:
+      Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
+
+    Remote multi-host:
+      Invoke-ForensicCollector -Mode Full -ComputerName PC01,PC02 -OutputPath .\Output -ThrottleLimit 8 -Verbose
+
+    CSV fan-out with parallelism (PowerShell 7+):
+      Invoke-ForensicCollector -Mode Quick -ComputerListCsv .\computers.csv -OutputPath .\Output -UseParallel -ThrottleLimit 16
+
+    SSH remote (PowerShell 7+):
+      Invoke-ForensicCollector -Mode Deep -HostName ubuntu01 -UserName ir -KeyFilePath $HOME\.ssh\id_ed25519 -OutputPath .\Output
+
+    Custom profile:
+      Invoke-ForensicCollector -Mode Custom -CustomProfilePath .\examples\custom_profile.json -OutputPath .\Output
+
+    SIEM NDJSON/JSONL output (per-host + merged):
+      Invoke-ForensicCollector -Mode Quick -ComputerListCsv .\examples\targets.csv -OutputPath .\Output -UseParallel -ThrottleLimit 16 -SiemFormat Ndjson
+
+TROUBLESHOOTING
+    - Security log warnings: run elevated or ensure the account has Event Log read rights.
+    - Remoting failures: test with Test-WSMan / Enter-PSSession; verify firewall/WinRM listeners and creds.
+    - ZIP not produced: check collector.log for errors; ensure Compress-Archive is available (PowerShell 5+).
+
+SEE ALSO
+    Invoke-ForensicCollector

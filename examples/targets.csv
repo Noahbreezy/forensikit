@@ -1,0 +1,16 @@
+# Example mixed-OS target list for Invoke-ForensicCollector
+# Columns:
+# - ComputerName: WinRM target (typically Windows)
+# - HostName: SSH target (typically Linux/macOS)
+# - OS: Windows | Linux | macOS | Auto
+# - Transport: WinRM | SSH | Auto
+#
+# Notes:
+# - For SSH targets you must run from PowerShell 7+ and provide -UserName and -KeyFilePath when invoking.
+# - If Transport is Auto, the tool uses OS to decide (Windows=WinRM, Linux/macOS=SSH).
+
+ComputerName,HostName,OS,Transport
+PC01,,Windows,Auto
+PC02,,Windows,WinRM
+,ubuntu01,Linux,Auto
+,macmini01,macOS,SSH

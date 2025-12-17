@@ -1,0 +1,263 @@
+# Forensikit (MVP)
+
+PowerShell-based evidence collection for incident response.
+
+## Requirements
+- Windows, Linux, or macOS.
+- PowerShell 7+ recommended. Windows PowerShell 5.1 is supported on Windows only.
+- For WinRM remoting (Windows targets): WinRM/PowerShell Remoting enabled and reachable from the coordinator host.
+- For SSH remoting (Linux/macOS targets, PowerShell 7+): SSH reachable and key-based auth configured.
+- To read Security Event Log on Windows, run elevated or with an account that has log read rights.
+
+## Built-in help
+```powershell
+Get-Help Invoke-ForensicCollector -Full
+Get-Help about_Forensikit
+```
+
+## Quick start (local)
+
+```powershell
+# From repo root
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
+```
+
+## Modes
+- Quick: processes, network, users, event logs (last 24h).
+- Full: processes, network, users, event logs (last 7 days).
+- Deep: Quick/Full plus services, drivers, scheduled tasks, autoruns, installed software, DNS cache, firewall rules (event logs last 14 days).
+- Custom: provide your own JSON profile.
+
+## Remote collection (PowerShell Remoting)
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Quick -ComputerName PC01,PC02 -OutputPath .\Output -Verbose
+```
+
+## Network-wide (CSV)
+
+CSV can contain mixed OS targets. Supported columns:
+- `ComputerName` (WinRM target; typically Windows)
+- `HostName` (SSH target; typically Linux/macOS)
+- `OS` (Windows | Linux | macOS | Auto)
+- `Transport` (WinRM | SSH | Auto)
+
+Example file: [examples/targets.csv](examples/targets.csv)
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Quick -ComputerListCsv .\computers.csv -OutputPath .\Output -ThrottleLimit 16 -Verbose
+```
+
+Mixed OS fan-out example (PowerShell 7+ required if the CSV includes SSH targets):
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Deep -ComputerListCsv .\examples\targets.csv -OutputPath .\Output -ThrottleLimit 16 -UserName ir -KeyFilePath $HOME\.ssh\id_ed25519 -Verbose
+```
+
+## Remote collection over SSH (PowerShell 7+)
+
+Use this for Linux/macOS (or any host reachable via SSH with PowerShell installed).
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Deep -HostName ubuntu01 -UserName ir -KeyFilePath $HOME\.ssh\id_ed25519 -OutputPath .\Output -Verbose
+```
+
+## Custom profile
+Example file: [examples/custom_profile.json](examples/custom_profile.json)
+
+```json
+{
+	"Collectors": ["Processes", "Network", "Users", "EventLogs"],
+	"EventLogHours": 48
+}
+```
+
+Run with:
+```powershell
+Invoke-ForensicCollector -Mode Custom -CustomProfilePath .\examples\custom_profile.json -OutputPath .\Output
+```
+
+## Output
+
+Each run creates:
+- a structured folder per target
+- `collector.log` (errors + progress)
+- `integrity.csv` (SHA256 per file)
+- optional SIEM output: `siem\events.ndjson` per host and `siem\merged.ndjson` per run
+- a ZIP archive of the collected folder
+
+Example layout:
+```
+Output\20251215_224654Z\MERCURY\
+	volatile\processes\processes.csv, processes_wmi.json
+	volatile\network\net_tcp_connections.csv, net_udp_endpoints.csv, ipconfig_all.txt, route_print.txt, arp_a.txt, netstat_abno.txt
+	persistent\users\whoami_all.txt, local_users.csv, local_groups.csv, local_group_members.csv
+	persistent\eventlogs\System_events.csv/json, Application_events.csv/json, Security_events.csv/json (if permitted)
+	persistent\services\services.csv, drivers.csv
+	persistent\tasks\scheduled_tasks.csv/json
+	persistent\registry\autoruns.csv
+	persistent\software\installed_software.csv
+	persistent\network\dns_cache.txt, firewall_rules.csv
+	logs\collector.log
+	run.json
+	integrity.csv
+	siem\events.ndjson
+Output\20251215_224654Z\MERCURY_20251215_224654Z.zip
+
+If SIEM output is enabled for a multi-host run, a merged file is also produced:
+```
+Output\20251215_224654Z\siem\merged.ndjson
+```
+```
+
+## Parameters (high level)
+- `-Mode`: Quick | Full | Deep | Custom
+- `-OutputPath`: base output directory (run subfolders are created under this)
+- `-CaseId`: optional prefix to tag run/zip names
+- `-ComputerName`: WinRM remoting targets
+- `-HostName`: SSH remoting targets (PowerShell 7+)
+- `-UserName`: SSH user name (PowerShell 7+)
+- `-KeyFilePath`: SSH private key path (PowerShell 7+)
+- `-ComputerListCsv`: CSV with `ComputerName`
+- `-Credential`: credentials for remoting
+- `-ThrottleLimit`: max concurrency (applies to remote fan-out)
+- `-CustomProfilePath`: JSON profile for Custom mode
+- `-UseParallel`: enable PowerShell 7+ parallel fan-out
+- `-SiemFormat`: None | Ndjson (writes NDJSON/JSONL under each host folder)
+- `-MergeSiem`: when using `-SiemFormat Ndjson`, also writes `siem\merged.ndjson` under the run folder (default: true)
+
+## SIEM output (NDJSON/JSONL)
+
+Enable NDJSON/JSONL output for ingestion pipelines:
+
+```powershell
+Invoke-ForensicCollector -Mode Quick -ComputerListCsv .\examples\targets.csv -OutputPath .\Output -UseParallel -ThrottleLimit 16 -SiemFormat Ndjson
+```
+
+What gets written:
+- Per host: `siem\events.ndjson` (JSON Lines / NDJSON)
+	- `run_meta` event (run metadata)
+	- `record` events for each row in collected `*.csv` files
+	- `artifact` events from `integrity.csv` (SHA256 inventory)
+- Per run (multi-target): `siem\merged.ndjson` (concatenation of all per-host `events.ndjson`)
+
+## Cross-platform notes
+
+- The output folder structure is consistent across OSes, but some collectors are platform-specific.
+	- Windows: `EventLogs` uses Windows Event Logs; `Registry` collects autoruns from HKLM/HKCU.
+	- Linux: `EventLogs` uses `journalctl` when available and/or common files in `/var/log`; `Registry` collects common persistence locations (systemd units, shell startup, etc.).
+	- macOS: `EventLogs` uses `log show` when available; `Services` uses `launchctl`.
+- Some artifacts require elevated rights on all OSes; failures are logged and the run continues.
+
+## Authentication & secrets
+
+### WinRM (Windows targets: `-ComputerName` / CSV `ComputerName`)
+
+- Uses `New-PSSession -ComputerName` under the hood.
+- Authentication is handled by WinRM/PowerShell Remoting (commonly Kerberos in a domain, or NTLM depending on environment).
+- You can:
+	- omit `-Credential` to use your current logon token, or
+	- pass a `PSCredential` (prompted or retrieved from a secure store).
+
+Recommended ways to supply credentials:
+- Interactive: `-Credential (Get-Credential)`
+- Automation: use a secret store (PowerShell SecretManagement, Windows Credential Manager, or your CI/CD secret store).
+
+Avoid:
+- storing passwords in CSV files or in the repository
+- hardcoding passwords in scripts
+
+### SSH (Linux/macOS targets: `-HostName` / CSV `HostName`, PowerShell 7+)
+
+- Uses PowerShell SSH remoting: `New-PSSession -HostName -UserName -KeyFilePath`.
+- Authentication is SSH key-based.
+
+Recommended key handling:
+- Store private keys in your user profile (e.g. `~/.ssh/`) and keep them out of the repo.
+- Prefer passphrase-protected keys.
+- Use an agent where available:
+	- Windows: OpenSSH Authentication Agent (or equivalent)
+	- Linux/macOS: `ssh-agent`
+
+Avoid:
+- placing private keys in `examples/` or committing them to git
+- world-readable key files (ensure file permissions restrict access to your user)
+
+## Permissions matrix
+
+This matrix is a practical guide; exact requirements vary by org policy, OS hardening, and EDR controls. The tool will continue on access failures and record warnings in `collector.log`.
+
+| Feature / Collector | Windows (local) | Linux (local) | macOS (local) | Remote prerequisites |
+|---|---|---|---|---|
+| Run + write output | Write access to `-OutputPath` | Write access to `-OutputPath` | Write access to `-OutputPath` | Same, plus remoting connectivity |
+| Processes | Usually works as standard user; full details may need admin | `ps` works as user; some details may need root | `ps` works as user; some details may need sudo | Same permissions on target account |
+| Network | Basic network info works as user; socket ownership/details may need admin | `ss -p` / process ownership may need root/caps; otherwise partial | Similar to Linux; some details may need sudo | Same permissions on target account |
+| Users / groups | Standard user sees own token; local account/group enumeration may require admin depending on policy | `/etc/passwd`/`getent` usually readable; directory/privileged sources may differ | Similar to Linux | Same permissions on target account |
+| Event logs / system logs | System/Application often OK; Security log typically needs admin or Event Log Readers rights | `journalctl`/`/var/log/*` may require `adm` group or root | `log show` may require sudo for some subsystems | Same permissions on target account |
+| Services / drivers | `Get-Service` usually OK; driver/CIM queries may need admin depending on WMI perms | `systemctl` listing often OK; deeper details may need root; `lsmod` may need root | `launchctl` visibility may be limited without sudo | Same permissions on target account |
+| Scheduled tasks / cron | `Get-ScheduledTask` can be restricted; some tasks require admin to enumerate fully | `crontab -l` reads current user; system cron dirs/timers may need root | Similar; launchd visibility can be limited | Same permissions on target account |
+| Persistence / autoruns | HKCU run keys: user; HKLM run keys: may require admin in hardened setups | Reading `/etc/*` and system unit dirs may require root | Similar (system locations may require sudo) | Same permissions on target account |
+| Installed software | Uninstall registry keys often readable; may be restricted by policy | `dpkg-query`/`rpm -qa` usually OK as user | `/Applications` list usually OK; `brew` is per-user | Same permissions on target account |
+| DNS + firewall | DNS cache/firewall rules may require admin depending on cmdlets/policy | firewall rules (`iptables`/`nft`) often requires root; resolv.conf/hosts usually readable | similar; may require sudo | Same permissions on target account |
+| WinRM remoting | Local: rights to create WinRM session; Target: WinRM enabled, firewall allows, user allowed for remoting | N/A | N/A | Kerberos/NTLM via WinRM; optional `-Credential` |
+| SSH remoting | N/A | Local: PowerShell 7+; Target: SSH reachable and `pwsh` installed; user can SSH | Same as Linux | Key-based auth via `-UserName/-KeyFilePath` |
+
+## Remoting notes
+- Ensure WinRM is enabled: `Enable-PSRemoting -Force` (run as admin on targets).
+- Test connectivity: `Test-WSMan <ComputerName>`.
+- Module is copied to remote temp, run executed there, ZIP pulled back.
+- If Security log fails, collection continues and a warning is logged.
+
+SSH remoting notes (PowerShell 7+):
+- Ensure SSH is reachable and PowerShell is installed on the target (`pwsh`).
+- Use key-based auth; `-KeyFilePath` is required.
+
+## Testing
+
+```powershell
+# Requires Pester 5+
+Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+Invoke-Pester -Path .\tests -Output Detailed
+```
+
+## Rubric justification (project notes)
+
+### Analyse (SWOT)
+
+- Strengths: Automates tedious forensic work. Reduces errors. Open-source and modifiable.
+- Weaknesses: PowerShell is limited in cross-platform support for advanced operations.
+- Opportunities: Growing demand for lightweight IR tooling. Design allows for commercial expansion.
+- Threats: Possibly too complex to properly expand. Restrictive policies may render the tool less effective.
+
+### Design
+
+Uses PowerShell core commands + optional external tools (Sysinternals, 7-Zip, AWS CLI) orchestrated from a single interface. Architecture is modular: Collection, Compression, Logging, Upload (future).
+
+### Kennisverwerving
+
+Demonstrates understanding of PowerShell scripting, WMI/CIM, file hashing, REST APIs, and cloud storage integration concepts.
+
+### Usability
+
+Simple syntax (`Invoke-ForensicCollector`) with parameters for mode and output path. Structured output plus a `collector.log` and `run.json` summary.
+
+### Robust
+
+Parameter validation, try/catch error handling, and a log file. Integrity verification via SHA256 hashes in `integrity.csv`.
+
+### Uitbreidbaarheid
+
+Collectors live in `src/Forensikit/Private/Collectors/` and are invoked by name; adding a new collector is isolated to a new file + profile inclusion.
+
+### Best Practices / Structuur
+
+Verb-Noun naming, module layout (Public/Private), comment-based help, and structured output folders.
+
+### Testing
+
+Pester tests validate key behaviors (folder creation, integrity log, compression).
