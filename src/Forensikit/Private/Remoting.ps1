@@ -1,7 +1,7 @@
 function Invoke-FSKLocalCollection {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)]$CollectorConfig,
         [Parameter(Mandatory)][string]$OutputPath,
         [Parameter()][string]$CaseId,
         [Parameter()][string]$RunId,
@@ -16,19 +16,19 @@ function Invoke-FSKLocalCollection {
         Version     = '0.1.0'
         Computer    = $env:COMPUTERNAME
         User        = $env:USERNAME
-        Mode        = $Profile.Mode
+        Mode        = $CollectorConfig.Mode
         StartedUtc  = (Get-Date).ToUniversalTime().ToString('o')
-        Collectors  = @($Profile.Collectors)
+        Collectors  = @($CollectorConfig.Collectors)
     }
 
-    Write-FSKLog -Logger $logger -Level INFO -Message "Run started (Mode=$($Profile.Mode))"
+    Write-FSKLog -Logger $logger -Level INFO -Message "Run started (Mode=$($CollectorConfig.Mode))"
 
-    foreach ($collector in $Profile.Collectors) {
+    foreach ($collector in $CollectorConfig.Collectors) {
         switch ($collector) {
             'Processes' { Invoke-FSKCollectProcesses -Run $run -Logger $logger }
             'Network'   { Invoke-FSKCollectNetwork -Run $run -Logger $logger }
             'Users'     { Invoke-FSKCollectUsers -Run $run -Logger $logger }
-            'EventLogs' { Invoke-FSKCollectEventLogs -Run $run -Logger $logger -Profile $Profile }
+            'EventLogs' { Invoke-FSKCollectEventLogs -Run $run -Logger $logger -CollectorConfig $CollectorConfig }
             'Services'  { Invoke-FSKCollectServices -Run $run -Logger $logger }
             'ScheduledTasks' { Invoke-FSKCollectScheduledTasks -Run $run -Logger $logger }
             'Registry'  { Invoke-FSKCollectRegistry -Run $run -Logger $logger }
@@ -47,7 +47,7 @@ function Invoke-FSKLocalCollection {
 
     $siemPath = $null
     if ($SiemFormat -eq 'Ndjson') {
-        $siemPath = Export-FSKSiemNdjson -Run $run -Config $Profile -Logger $logger -NdjsonPath (Join-Path $run.Root 'siem\\events.ndjson')
+        $siemPath = Export-FSKSiemNdjson -Run $run -Config $CollectorConfig -Logger $logger -NdjsonPath (Join-Path $run.Root 'siem\\events.ndjson')
     }
 
     $zipPath = Join-Path (Split-Path $run.Root -Parent) ("$($env:COMPUTERNAME)_$($run.RunId).zip")
@@ -69,7 +69,7 @@ function Invoke-FSKRemoteSingle {
     param(
         [Parameter(Mandatory)][string]$Target,
         [Parameter()][ValidateSet('WinRM','SSH')][string]$Transport = 'WinRM',
-        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)]$CollectorConfig,
         [Parameter(Mandatory)][string]$OutputPath,
         [Parameter()][string]$CaseId,
         [Parameter()][string]$RunId,
@@ -128,13 +128,13 @@ function Invoke-FSKRemoteSingle {
         $remoteModule = Join-Path $remoteBase 'Forensikit'
         Copy-Item -Path $localModule -Destination $remoteModule -ToSession $session -Recurse -Force
 
-        $remoteResult = Invoke-Command -Session $session -ArgumentList @($remoteModule, $Profile, $remoteBase, $CaseId, $RunId, $SiemFormat) -ScriptBlock {
-            param($remoteModule, $profile, $remoteBase, $caseId, $runId, $siemFormat)
+        $remoteResult = Invoke-Command -Session $session -ArgumentList @($remoteModule, $CollectorConfig, $remoteBase, $CaseId, $RunId, $SiemFormat) -ScriptBlock {
+            param($remoteModule, $collectorConfig, $remoteBase, $caseId, $runId, $siemFormat)
 
             Import-Module (Join-Path $remoteModule 'Forensikit.psd1') -Force
 
             $out = Join-Path $remoteBase 'Output'
-            Invoke-FSKLocalCollection -Profile $profile -OutputPath $out -CaseId $caseId -RunId $runId -SiemFormat $siemFormat
+            Invoke-FSKLocalCollection -CollectorConfig $collectorConfig -OutputPath $out -CaseId $caseId -RunId $runId -SiemFormat $siemFormat
         }
 
         $localRunFolder = Join-Path $OutputPath $remoteResult.RunId
@@ -173,7 +173,7 @@ function Invoke-FSKRemoteFanout {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string[]]$Targets,
-        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)]$CollectorConfig,
         [Parameter(Mandatory)][string]$OutputPath,
         [Parameter()][string]$CaseId,
         [Parameter()][string]$RunId,
@@ -220,7 +220,7 @@ function Invoke-FSKRemoteFanout {
             try {
                 Import-Module $using:PSScriptRoot\..\..\Forensikit.psd1 -Force
                 $transport = if ($using:HostNameTargets -and ($using:HostNameTargets -contains $_)) { 'SSH' } else { 'WinRM' }
-                Invoke-FSKRemoteSingle -Target $_ -Transport $transport -Profile $using:Profile -OutputPath $using:OutputPath -CaseId $using:CaseId -RunId $using:RunId -Credential $using:Credential -SshUserName $using:SshUserName -SshKeyFilePath $using:SshKeyFilePath -SiemFormat $using:SiemFormat
+                Invoke-FSKRemoteSingle -Target $_ -Transport $transport -CollectorConfig $using:CollectorConfig -OutputPath $using:OutputPath -CaseId $using:CaseId -RunId $using:RunId -Credential $using:Credential -SshUserName $using:SshUserName -SshKeyFilePath $using:SshKeyFilePath -SiemFormat $using:SiemFormat
             } catch {
                 [pscustomobject]@{ Computer = $_; Error = $_.Exception.Message }
             }
@@ -229,7 +229,7 @@ function Invoke-FSKRemoteFanout {
         foreach ($t in $Targets) {
             try {
                 $transport = if ($HostNameTargets -and ($HostNameTargets -contains $t)) { 'SSH' } else { 'WinRM' }
-                $results.Add((Invoke-FSKRemoteSingle -Target $t -Transport $transport -Profile $Profile -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -SiemFormat $SiemFormat))
+                $results.Add((Invoke-FSKRemoteSingle -Target $t -Transport $transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -SiemFormat $SiemFormat))
             } catch {
                 $results.Add([pscustomobject]@{ Computer = $t; Error = $_.Exception.Message })
             }

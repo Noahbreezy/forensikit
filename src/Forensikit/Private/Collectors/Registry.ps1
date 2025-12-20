@@ -36,10 +36,10 @@ function Invoke-FSKCollectRegistry {
             }
 
             # Current user shell startup files
-            $home = $HOME
-            if ($home) {
+            $userDir = (Resolve-Path -LiteralPath '~').Path
+            if ($userDir) {
                 foreach ($f in @('.profile','.bash_profile','.bashrc','.zshrc','.zprofile','.config/autostart')) {
-                    $p = Join-Path $home $f
+                    $p = Join-Path $userDir $f
                     try {
                         if (Test-Path $p) {
                             if ((Get-Item $p).PSIsContainer) {

@@ -26,12 +26,12 @@ Describe 'Forensikit MVP' {
 
     It 'Deep profile contains extended collectors' {
         InModuleScope Forensikit {
-            $profile = Get-FSKProfile -Mode 'Deep'
-            $profile.Collectors | Should -Contain 'Services'
-            $profile.Collectors | Should -Contain 'ScheduledTasks'
-            $profile.Collectors | Should -Contain 'Registry'
-            $profile.Collectors | Should -Contain 'InstalledSoftware'
-            $profile.Collectors | Should -Contain 'DnsFirewall'
+            $fskConfig = Get-FSKConfig -Mode 'Deep'
+            $fskConfig.Collectors | Should -Contain 'Services'
+            $fskConfig.Collectors | Should -Contain 'ScheduledTasks'
+            $fskConfig.Collectors | Should -Contain 'Registry'
+            $fskConfig.Collectors | Should -Contain 'InstalledSoftware'
+            $fskConfig.Collectors | Should -Contain 'DnsFirewall'
         }
     }
 
@@ -93,7 +93,20 @@ Describe 'Forensikit MVP' {
 
             $captured = $null
             Mock -CommandName Invoke-FSKRemoteFanout -MockWith {
-                param($Targets,$Profile,$OutputPath,$CaseId,$RunId,$Credential,$ThrottleLimit,$UseParallel,$HostNameTargets,$SshUserName,$SshKeyFilePath,$SiemFormat)
+                param(
+                    $Targets,
+                    $CollectorConfig,
+                    $OutputPath,
+                    $CaseId,
+                    $RunId,
+                    [pscredential]$RemoteCredential,
+                    $ThrottleLimit,
+                    $UseParallel,
+                    $HostNameTargets,
+                    $SshUserName,
+                    $SshKeyFilePath,
+                    $SiemFormat
+                )
                 $script:captured = [pscustomobject]@{
                     Targets = @($Targets)
                     HostNameTargets = @($HostNameTargets)
@@ -121,7 +134,7 @@ Describe 'Forensikit MVP' {
         InModuleScope Forensikit {
             $run = New-FSKRunFolder -OutputPath $global:FSK_TestRoot -ComputerName 'TESTSIEM'
             $logger = New-FSKLogger -LogPath (Join-Path $run.Logs 'test.log')
-            $profile = Get-FSKProfile -Mode 'Quick'
+            $fskConfig = Get-FSKConfig -Mode 'Quick'
 
             # Create a small CSV to simulate collector output
             $csvPath = Join-Path (Join-Path $run.Volatile 'processes') 'tiny.csv'
@@ -130,7 +143,7 @@ Describe 'Forensikit MVP' {
                 [pscustomobject]@{ A = '2'; B = 'y' }
             ) | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
 
-            $ndjsonPath = Export-FSKSiemNdjson -Run $run -Config $profile -Logger $logger
+            $ndjsonPath = Export-FSKSiemNdjson -Run $run -Config $fskConfig -Logger $logger
             (Test-Path $ndjsonPath) | Should -BeTrue
 
             $lines = Get-Content -Path $ndjsonPath

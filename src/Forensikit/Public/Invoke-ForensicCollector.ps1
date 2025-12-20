@@ -204,7 +204,7 @@ function Invoke-ForensicCollector {
         New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
     }
 
-    $profile = Get-FSKProfile -Mode $Mode -CustomProfilePath $CustomProfilePath
+    $fskConfig = Get-FSKConfig -Mode $Mode -CustomProfilePath $CustomProfilePath
 
     if ($targets.Count -gt 0) {
         if ($PSCmdlet.ShouldProcess(($targets -join ','), "Collect forensic evidence (remote)")) {
@@ -212,7 +212,7 @@ function Invoke-ForensicCollector {
             $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmssZ')
             $runId = if ($CaseId) { "$CaseId`_$stamp" } else { $stamp }
 
-            $results = Invoke-FSKRemoteFanout -Targets $targets -Profile $profile -OutputPath $OutputPath -CaseId $CaseId -RunId $runId -Credential $Credential -ThrottleLimit $ThrottleLimit -UseParallel:$UseParallel -HostNameTargets @($sshTargets.ToArray()) -SshUserName $UserName -SshKeyFilePath $KeyFilePath -SiemFormat $SiemFormat
+            $results = Invoke-FSKRemoteFanout -Targets $targets -CollectorConfig $fskConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $runId -Credential $Credential -ThrottleLimit $ThrottleLimit -UseParallel:$UseParallel -HostNameTargets @($sshTargets.ToArray()) -SshUserName $UserName -SshKeyFilePath $KeyFilePath -SiemFormat $SiemFormat
 
             if ($SiemFormat -eq 'Ndjson' -and $MergeSiem) {
                 try {
@@ -230,6 +230,6 @@ function Invoke-ForensicCollector {
     }
 
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, "Collect forensic evidence (local)")) {
-        Invoke-FSKLocalCollection -Profile $profile -OutputPath $OutputPath -CaseId $CaseId -SiemFormat $SiemFormat
+        Invoke-FSKLocalCollection -CollectorConfig $fskConfig -OutputPath $OutputPath -CaseId $CaseId -SiemFormat $SiemFormat
     }
 }

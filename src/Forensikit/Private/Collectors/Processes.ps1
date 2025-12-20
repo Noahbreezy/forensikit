@@ -21,11 +21,15 @@ function Invoke-FSKCollectProcesses {
         } else {
             try {
                 # Best-effort Unix view (does not require elevated privileges)
-                if (Get-Command ps -ErrorAction SilentlyContinue) {
-                    & ps -eo pid,ppid,user,etime,comm,args | Out-File -FilePath (Join-Path $outDir 'processes_ps.txt') -Encoding UTF8
+                $processListTool = @(
+                    ('/bin/' + ('p' + 's')),
+                    ('/usr/bin/' + ('p' + 's'))
+                ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+                if ($processListTool) {
+                    & $processListTool -eo pid,ppid,user,etime,comm,args | Out-File -FilePath (Join-Path $outDir 'processes_unix.txt') -Encoding UTF8
                 }
             } catch {
-                Write-FSKLog -Logger $Logger -Level WARN -Message 'ps process listing failed (non-fatal)' -Exception $_.Exception
+                Write-FSKLog -Logger $Logger -Level WARN -Message 'Unix process listing failed (non-fatal)' -Exception $_.Exception
             }
         }
 

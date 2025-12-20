@@ -3,12 +3,12 @@ function Invoke-FSKCollectEventLogs {
     param(
         [Parameter(Mandatory)]$Run,
         [Parameter(Mandatory)]$Logger,
-        [Parameter(Mandatory)]$Profile
+        [Parameter(Mandatory)]$CollectorConfig
     )
 
     $outDir = Join-Path $Run.Persistent 'eventlogs'
 
-    $hours = [int]$Profile.EventLogHours
+    $hours = [int]$CollectorConfig.EventLogHours
     if ($hours -lt 1) { $hours = 24 }
     $platform = Get-FSKPlatform
 

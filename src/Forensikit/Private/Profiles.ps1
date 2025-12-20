@@ -1,4 +1,4 @@
-function Get-FSKProfile {
+function Get-FSKConfig {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -47,4 +47,18 @@ function Get-FSKProfile {
             return $obj
         }
     }
+}
+
+function Get-FSKProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Quick','Full','Deep','Custom')]
+        [string]$Mode,
+
+        [Parameter()]
+        [string]$CustomProfilePath
+    )
+
+    return Get-FSKConfig @PSBoundParameters
 }
