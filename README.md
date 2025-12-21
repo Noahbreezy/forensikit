@@ -233,6 +233,23 @@ What gets written:
 	- macOS: `EventLogs` uses `log show` when available; `Services` uses `launchctl`.
 - Some artifacts require elevated rights on all OSes; failures are logged and the run continues.
 
+## Collector support matrix (Windows vs Linux)
+
+Forensikit aims for broad cross-platform coverage, but some collectors are inherently OS-specific.
+On Linux, several collectors provide a best-effort *equivalent* rather than a 1:1 match to Windows artifacts.
+
+| Collector | Windows output (high level) | Linux output (high level) | Notes / parity |
+|---|---|---|---|
+| Processes | `Get-Process` + extra detail via `Win32_Process` (CIM) | `Get-Process` + best-effort `ps` listing | Parity is good; Linux process details depend on permissions/tools. |
+| Network | `Get-NetTCPConnection` / `Get-NetUDPEndpoint` + `ipconfig/route/arp/netstat` | `ss` or `netstat` + `ip addr/route/neigh` (or `ifconfig`) | Socket ownership/process mapping may be partial on Linux without root/caps. |
+| Users | `whoami /all`, local users/groups, group membership | `whoami`, `id`, `/etc/passwd`, `/etc/group`, `getent` | Different data sources; generally comparable coverage. |
+| EventLogs | Windows Event Logs via `Get-WinEvent` (System/Security/Application) | `journalctl` when available + common `/var/log/*` files | Not 1:1. Linux access often depends on `adm`/root and distro logging. |
+| Services | `Get-Service` + drivers via `Win32_SystemDriver` | `systemctl` listings + `lsmod` (when available) | “Drivers” on Linux are kernel modules; not a direct match. |
+| ScheduledTasks | `Get-ScheduledTask` (flattened CSV/JSON) | `crontab`, `/etc/cron.*`, and `systemctl list-timers` | Equivalent concepts; not 1:1. Some system locations require root. |
+| Registry | Autoruns from HKLM/HKCU Run/RunOnce keys | Common persistence locations (systemd units, shell startup files, etc.) | Equivalent *persistence* view; there is no registry on Linux. |
+| InstalledSoftware | Uninstall registry keys (HKLM/HKCU) | `dpkg-query` and/or `rpm`, plus `snap`/`flatpak` when present | Different package managers; coverage varies by distro. |
+| DnsFirewall | DNS cache via `ipconfig /displaydns` + firewall rules via `Get-NetFirewallRule` | `/etc/resolv.conf` + `/etc/hosts` + firewall via `ufw`/`firewalld`/`nft`/`iptables` | Linux DNS cache is not standardized; this is a config snapshot, not a cache equivalent. |
+
 ## Authentication & secrets
 
 ### WinRM (Windows targets: `-ComputerName` / CSV `ComputerName`)

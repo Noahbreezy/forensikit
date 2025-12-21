@@ -45,9 +45,6 @@ function Invoke-FSKLocalCollection {
     $metaPath = Join-Path $run.Root 'run.json'
     ($meta | ConvertTo-Json -Depth 6) | Out-File -FilePath $metaPath -Encoding UTF8
 
-    $integrityPath = Join-Path $run.Root 'integrity.csv'
-    New-FSKIntegrityLog -RootPath $run.Root -IntegrityCsvPath $integrityPath
-
     $siemPath = $null
     if ($SiemFormat -eq 'Ndjson') {
         $siemPath = Export-FSKSiemNdjson -Run $run -Config $CollectorConfig -Logger $logger -NdjsonPath (Join-Path $run.Root 'siem\\events.ndjson')
@@ -57,6 +54,9 @@ function Invoke-FSKLocalCollection {
     New-FSKZip -SourceFolder $run.Root -ZipPath $zipPath
 
     Write-FSKLog -Logger $logger -Level INFO -Message "Run finished; ZIP: $zipPath"
+
+    $integrityPath = Join-Path $run.Root 'integrity.csv'
+    New-FSKIntegrityLog -RootPath $run.Root -IntegrityCsvPath $integrityPath
 
     return [pscustomobject]@{
         RunId = $run.RunId
@@ -303,15 +303,18 @@ function Invoke-FSKRemoteFanout {
     }
 
     if ($canParallel) {
-        $Targets | ForEach-Object -Parallel {
+        $parallelResults = $Targets | ForEach-Object -Parallel {
             try {
-                Import-Module $using:PSScriptRoot\..\..\Forensikit.psd1 -Force
+                Import-Module (Join-Path $using:PSScriptRoot '..\Forensikit.psd1') -Force
                 $transport = if ($using:HostNameTargets -and ($using:HostNameTargets -contains $_)) { 'SSH' } else { 'WinRM' }
                 Invoke-FSKRemoteSingle -Target $_ -Transport $transport -CollectorConfig $using:CollectorConfig -OutputPath $using:OutputPath -CaseId $using:CaseId -RunId $using:RunId -Credential $using:Credential -SshUserName $using:SshUserName -SshKeyFilePath $using:SshKeyFilePath -SiemFormat $using:SiemFormat
             } catch {
                 [pscustomobject]@{ Computer = $_; Error = $_.Exception.Message }
             }
         } -ThrottleLimit $ThrottleLimit
+
+        # Preserve any preflight error objects (e.g. SSH prerequisites) alongside parallel results.
+        return @($results.ToArray()) + @($parallelResults)
     } else {
         foreach ($t in $Targets) {
             try {

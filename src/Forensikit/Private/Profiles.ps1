@@ -41,8 +41,12 @@ function Get-FSKConfig {
             $raw = Get-Content -Path $CustomProfilePath -Raw -Encoding UTF8
             $obj = $raw | ConvertFrom-Json
 
-            if (-not $obj.Collectors) { throw "Custom profile must include Collectors" }
-            if (-not $obj.EventLogHours) { $obj | Add-Member -NotePropertyName EventLogHours -NotePropertyValue (24) }
+            if (-not $obj.Collectors -or @($obj.Collectors).Count -eq 0) {
+                throw "Custom profile must include Collectors (non-empty array)"
+            }
+            if ($null -eq $obj.EventLogHours) {
+                $obj | Add-Member -NotePropertyName EventLogHours -NotePropertyValue 24
+            }
             $obj.Mode = 'Custom'
             return $obj
         }

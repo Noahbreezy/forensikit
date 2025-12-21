@@ -177,6 +177,7 @@ function Invoke-ForensicCollector {
                 }
 
                 $moduleManifest = (Resolve-Path (Join-Path $PSScriptRoot '..\Forensikit.psd1')).Path
+                $moduleManifestEscaped = $moduleManifest.Replace("'","''")
                 $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($bound | ConvertTo-Json -Depth 8 -Compress)))
 
                 $cmd = @"
@@ -188,7 +189,7 @@ if (`$params.ContainsKey('__FSKCredentialPath')) {
     `$params.Credential = Import-Clixml -Path `$params.__FSKCredentialPath
     `$params.Remove('__FSKCredentialPath')
 }
-Import-Module '$moduleManifest' -Force
+Import-Module '$moduleManifestEscaped' -Force
 Invoke-ForensicCollector @params
 "@
 

@@ -15,7 +15,7 @@
         'Unregister-ForensikitSchedule'
     )
     CmdletsToExport   = @()
-    VariablesToExport = '*'
+    VariablesToExport = @()
     AliasesToExport   = @()
 
     PrivateData = @{
