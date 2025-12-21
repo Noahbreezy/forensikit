@@ -9,7 +9,10 @@
     PowerShellVersion = '5.1'
 
     FunctionsToExport = @(
-        'Invoke-ForensicCollector'
+        'Invoke-ForensicCollector',
+        'New-ForensikitCustomProfile',
+        'Register-ForensikitSchedule',
+        'Unregister-ForensikitSchedule'
     )
     CmdletsToExport   = @()
     VariablesToExport = '*'

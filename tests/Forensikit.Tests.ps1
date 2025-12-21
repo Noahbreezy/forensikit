@@ -177,4 +177,128 @@ Describe 'Forensikit MVP' {
             (Get-Content -Path $merged).Count | Should -Be 3
         }
     }
+
+    It 'Creates a custom profile JSON from a built-in mode' {
+        InModuleScope Forensikit {
+            $outProfile = Join-Path $global:FSK_TestRoot 'generated_profile.json'
+            $resolved = New-ForensikitCustomProfile -Mode Quick -Path $outProfile -Confirm:$false
+
+            (Test-Path $resolved) | Should -BeTrue
+            $obj = (Get-Content -Path $resolved -Raw -Encoding UTF8) | ConvertFrom-Json
+            @($obj.Collectors).Count | Should -BeGreaterThan 0
+            @($obj.Collectors) | Should -Contain 'Processes'
+            @($obj.Collectors) | Should -Contain 'EventLogs'
+            [int]$obj.EventLogHours | Should -Be 24
+        }
+    }
+
+    It 'Registers a schedule by creating a runner folder and script (without touching OS scheduler)' {
+        InModuleScope Forensikit {
+            $outProfile = Join-Path $global:FSK_TestRoot 'sched_profile.json'
+            New-ForensikitCustomProfile -Mode Quick -Path $outProfile -Confirm:$false | Out-Null
+
+            $origLocalAppData = $env:LOCALAPPDATA
+            try {
+                $env:LOCALAPPDATA = Join-Path $global:FSK_TestRoot 'LocalAppData'
+
+                Mock -CommandName Get-FSKPlatform -MockWith { 'Windows' }
+                Mock -CommandName Register-FSKWindowsScheduledTask -MockWith { param($Name) "Forensikit-$Name" }
+
+                $res = Register-ForensikitSchedule -Name 'testSchedule' -CustomProfilePath $outProfile -Every (New-TimeSpan -Minutes 10) -OutputPath $global:FSK_TestRoot -CopyProfile -Confirm:$false
+
+                $res | Should -Not -BeNullOrEmpty
+                $res.Platform | Should -Be 'Windows'
+                (Test-Path $res.ScheduleRoot) | Should -BeTrue
+                (Test-Path $res.RunnerScript) | Should -BeTrue
+                (Test-Path $res.ProfilePath) | Should -BeTrue
+                (Get-Content -Path $res.RunnerScript -Raw) | Should -Match 'Invoke-ForensicCollector'
+            } finally {
+                $env:LOCALAPPDATA = $origLocalAppData
+            }
+        }
+    }
+
+    It 'Supports weekly schedules (e.g. Sunday at 23:59)' {
+        InModuleScope Forensikit {
+            $outProfile = Join-Path $global:FSK_TestRoot 'weekly_profile.json'
+            New-ForensikitCustomProfile -Mode Quick -Path $outProfile -Confirm:$false | Out-Null
+
+            $origLocalAppData = $env:LOCALAPPDATA
+            try {
+                $env:LOCALAPPDATA = Join-Path $global:FSK_TestRoot 'LocalAppData2'
+
+                Mock -CommandName Get-FSKPlatform -MockWith { 'Windows' }
+                Mock -CommandName Register-FSKWindowsScheduledTask -MockWith {
+                    param(
+                        $Name,
+                        $RunnerScript,
+                        $DaysOfWeek,
+                        $At,
+                        $Every,
+                        $StartAt,
+                        $DaysOfMonth,
+                        $AtMonthly
+                    )
+                    $script:weeklyCapture = [pscustomobject]@{
+                        Name = $Name
+                        DaysOfWeek = $DaysOfWeek
+                        At = $At
+                    }
+                    return "Forensikit-$Name"
+                }
+
+                $res = Register-ForensikitSchedule -Name 'weekly' -CustomProfilePath $outProfile -DaysOfWeek Sunday -At (New-TimeSpan -Hours 23 -Minutes 59) -OutputPath $global:FSK_TestRoot -CopyProfile -Confirm:$false
+
+                $res.Details.Spec.Type | Should -Be 'Weekly'
+                $script:weeklyCapture | Should -Not -BeNullOrEmpty
+                @($script:weeklyCapture.DaysOfWeek) | Should -Contain ([System.DayOfWeek]::Sunday)
+                $script:weeklyCapture.At | Should -BeOfType ([TimeSpan])
+            } finally {
+                $env:LOCALAPPDATA = $origLocalAppData
+                Remove-Variable -Name weeklyCapture -Scope Script -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It 'Supports monthly schedules (e.g. 15th at 12:00)' {
+        InModuleScope Forensikit {
+            $outProfile = Join-Path $global:FSK_TestRoot 'monthly_profile.json'
+            New-ForensikitCustomProfile -Mode Quick -Path $outProfile -Confirm:$false | Out-Null
+
+            $origLocalAppData = $env:LOCALAPPDATA
+            try {
+                $env:LOCALAPPDATA = Join-Path $global:FSK_TestRoot 'LocalAppData3'
+
+                Mock -CommandName Get-FSKPlatform -MockWith { 'Windows' }
+                Mock -CommandName Register-FSKWindowsScheduledTask -MockWith {
+                    param(
+                        $Name,
+                        $RunnerScript,
+                        $DaysOfWeek,
+                        $At,
+                        $Every,
+                        $StartAt,
+                        $DaysOfMonth,
+                        $AtMonthly
+                    )
+                    $script:monthlyCapture = [pscustomobject]@{
+                        Name = $Name
+                        DaysOfMonth = $DaysOfMonth
+                        AtMonthly = $AtMonthly
+                    }
+                    return "Forensikit-$Name"
+                }
+
+                $res = Register-ForensikitSchedule -Name 'monthly' -CustomProfilePath $outProfile -DaysOfMonth 15 -AtMonthly (New-TimeSpan -Hours 12) -OutputPath $global:FSK_TestRoot -CopyProfile -Confirm:$false
+
+                $res.Details.Spec.Type | Should -Be 'Monthly'
+                $script:monthlyCapture | Should -Not -BeNullOrEmpty
+                @($script:monthlyCapture.DaysOfMonth) | Should -Contain 15
+                $script:monthlyCapture.AtMonthly | Should -BeOfType ([TimeSpan])
+            } finally {
+                $env:LOCALAPPDATA = $origLocalAppData
+                Remove-Variable -Name monthlyCapture -Scope Script -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }

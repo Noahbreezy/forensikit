@@ -82,6 +82,83 @@ Run with:
 Invoke-ForensicCollector -Mode Custom -CustomProfilePath .\examples\custom_profile.json -OutputPath .\Output
 ```
 
+## Scheduling / periodic runs
+
+Forensikit can be run periodically using a schedule that points at a **custom profile JSON**.
+This keeps scheduling explicit and avoids ambiguity about "defaults" changing over time.
+
+### 1) Create a custom profile from a built-in mode
+
+If you want "default" Quick/Full/Deep settings but also want scheduling, generate a custom profile file:
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+
+# Create a custom profile equivalent to -Mode Deep
+New-ForensikitCustomProfile -Mode Deep -Path .\deep_profile.json
+```
+
+You can edit the JSON afterward (e.g., change collector list or event log window).
+
+### 2) Register the periodic schedule
+
+Register a schedule that runs the profile on an interval:
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+
+Register-ForensikitSchedule \
+	-Name deepEvery6h \
+	-CustomProfilePath .\deep_profile.json \
+	-Every (New-TimeSpan -Hours 6) \
+	-OutputPath .\Output \
+	-CopyProfile \
+	-SiemFormat None
+```
+
+Weekly example (every Sunday at 23:59):
+
+```powershell
+Register-ForensikitSchedule \
+	-Name weeklySunday \
+	-CustomProfilePath .\deep_profile.json \
+	-DaysOfWeek Sunday \
+	-At (New-TimeSpan -Hours 23 -Minutes 59) \
+	-OutputPath .\Output \
+	-CopyProfile
+```
+
+Monthly example (every 15th day at 12:00):
+
+```powershell
+Register-ForensikitSchedule \
+	-Name monthly15th \
+	-CustomProfilePath .\deep_profile.json \
+	-DaysOfMonth 15 \
+	-AtMonthly (New-TimeSpan -Hours 12) \
+	-OutputPath .\Output \
+	-CopyProfile
+```
+
+Notes:
+- `-CopyProfile` makes the schedule self-contained by copying the profile into the schedule folder.
+- On Windows, you can add `-RunElevated` if required for artifacts like Security Event Log.
+- The schedule uses a generated `run.ps1` wrapper (stored under a per-schedule folder) that imports Forensikit and calls `Invoke-ForensicCollector -Mode Custom`.
+
+### Platform behavior
+
+- Windows: registers a Scheduled Task named `Forensikit-<Name>`.
+- Linux: writes a systemd **user** `.service` + `.timer` under `~/.config/systemd/user/`.
+	- Optionally add `-Install` to attempt `systemctl --user enable --now ...`.
+- macOS: writes a LaunchAgent plist under `~/Library/LaunchAgents/`.
+	- Optionally add `-Install` to attempt `launchctl load -w ...`.
+
+### Unregister
+
+```powershell
+Unregister-ForensikitSchedule -Name deepEvery6h
+```
+
 ## Output
 
 Each run creates:
@@ -219,11 +296,30 @@ SSH remoting notes (PowerShell 7+):
 
 ## Testing
 
+The test suite is split into:
+- **Unit** tests (mock-heavy, safe by default)
+- **Integration** tests (opt-in; may touch the real system and/or real remote hosts)
+
 ```powershell
 # Requires Pester 5+
 Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+# Run everything (integration tests are skipped unless enabled)
 Invoke-Pester -Path .\tests -Output Detailed
+
+# Run only unit tests
+Invoke-Pester -Path .\tests -Tag Unit -Output Detailed
+
+# Run integration tests (opt-in)
+$env:FSK_RUN_INTEGRATION = '1'
+Invoke-Pester -Path .\tests -Tag Integration -Output Detailed
 ```
+
+Optional remote integration (fan-out) environment variables:
+- `FSK_INTEGRATION_TARGETS` (comma-separated list, e.g. `host1,host2`)
+- `FSK_INTEGRATION_TRANSPORT` (`WinRM` or `SSH`)
+- `FSK_INTEGRATION_SSH_USER` (for SSH)
+- `FSK_INTEGRATION_SSH_KEY` (for SSH; path to private key file)
 
 ## Rubric justification (project notes)
 
