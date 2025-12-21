@@ -77,8 +77,11 @@ Describe 'Forensikit Integration' -Tag 'Integration' {
 
         if ($transport -match '^(?i)ssh$') {
             if ($PSVersionTable.PSVersion.Major -lt 7) {
-                Set-ItResult -Skipped -Because 'SSH integration requires PowerShell 7+'
-                return
+                $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+                if (-not $pwsh) {
+                    Set-ItResult -Skipped -Because 'SSH integration requires PowerShell 7+ (pwsh not found on PATH)'
+                    return
+                }
             }
             if (-not $env:FSK_INTEGRATION_SSH_USER -or -not $env:FSK_INTEGRATION_SSH_KEY) {
                 Set-ItResult -Skipped -Because 'Set FSK_INTEGRATION_SSH_USER and FSK_INTEGRATION_SSH_KEY'

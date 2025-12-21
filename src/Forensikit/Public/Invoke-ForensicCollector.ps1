@@ -133,6 +133,74 @@ function Invoke-ForensicCollector {
         [bool]$MergeSiem = $true
     )
 
+    # If SSH targets are present and we're running under Windows PowerShell 5.1, automatically
+    # re-execute the command under PowerShell 7+ (pwsh). This allows a single entrypoint to
+    # “pick the right host” based on remoting transport.
+    if (-not $env:FSK_REEXEC -and $PSVersionTable.PSVersion.Major -lt 7) {
+        $sshLikely = $false
+
+        if ($HostName -and $HostName.Count -gt 0) { $sshLikely = $true }
+        elseif ($UserName -or $KeyFilePath) { $sshLikely = $true }
+        elseif ($ComputerListCsv) {
+            try {
+                $head = Get-Content -Path $ComputerListCsv -TotalCount 1 -ErrorAction Stop
+                if ($head -match '(?i)\bHostName\b') { $sshLikely = $true }
+                else {
+                    $sample = Import-Csv -Path $ComputerListCsv | Select-Object -First 25
+                    foreach ($row in $sample) {
+                        if ($row.Transport -and ([string]$row.Transport -match '^(?i)ssh$')) { $sshLikely = $true; break }
+                        if ($row.OS -and ([string]$row.OS -match '^(?i)linux|mac(os)?$')) { $sshLikely = $true; break }
+                        if ($row.HostName) { $sshLikely = $true; break }
+                    }
+                }
+            } catch {
+                # If we can't inspect the CSV, don't force re-exec here; downstream validation will handle it.
+            }
+        }
+
+        if ($sshLikely) {
+            $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+            if (-not $pwshPath) {
+                throw 'SSH remoting requires PowerShell 7+ (pwsh). Install PowerShell 7 and ensure pwsh is on PATH.'
+            }
+
+            $env:FSK_REEXEC = '1'
+
+            $credentialPath = $null
+            $bound = @{} + $PSBoundParameters
+            try {
+                if ($bound.ContainsKey('Credential') -and $bound.Credential) {
+                    $credentialPath = Join-Path $env:TEMP ("fsk_cred_" + [guid]::NewGuid().ToString() + '.clixml')
+                    $bound.Credential | Export-Clixml -Path $credentialPath -Force
+                    $bound.Remove('Credential')
+                    $bound.__FSKCredentialPath = $credentialPath
+                }
+
+                $moduleManifest = (Resolve-Path (Join-Path $PSScriptRoot '..\Forensikit.psd1')).Path
+                $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($bound | ConvertTo-Json -Depth 8 -Compress)))
+
+                $cmd = @"
+`$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payload'))
+`$obj = `$json | ConvertFrom-Json
+`$params = @{}
+foreach (`$p in `$obj.PSObject.Properties) { `$params[`$p.Name] = `$p.Value }
+if (`$params.ContainsKey('__FSKCredentialPath')) {
+    `$params.Credential = Import-Clixml -Path `$params.__FSKCredentialPath
+    `$params.Remove('__FSKCredentialPath')
+}
+Import-Module '$moduleManifest' -Force
+Invoke-ForensicCollector @params
+"@
+
+                return & $pwshPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $cmd
+            } finally {
+                if ($credentialPath) {
+                    Remove-Item -Path $credentialPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
     # Note: -HostName targets may also come from CSV parsing.
     # We validate SSH prerequisites later in Invoke-FSKRemoteFanout so WinRM targets can still run
     # even if SSH prerequisites are missing.
