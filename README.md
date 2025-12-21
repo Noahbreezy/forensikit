@@ -162,8 +162,6 @@ Unregister-ForensikitSchedule -Name deepEvery6h
 ## Output
 
 Each run creates:
-- a structured folder per target
-- `collector.log` (errors + progress)
 - `integrity.csv` (SHA256 per file)
 - optional SIEM output: `siem\events.ndjson` per host and `siem\merged.ndjson` per run
 - a ZIP archive of the collected folder
@@ -179,6 +177,10 @@ Output\20251215_224654Z\MERCURY\
 	persistent\tasks\scheduled_tasks.csv/json
 	persistent\registry\autoruns.csv
 	persistent\software\installed_software.csv
+
+Pester test runs can emit an NUnit-style XML report for CI consumption. To keep these artifacts untracked, write them under `artifacts\test-results\`:
+
+`pwsh -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path .\artifacts\test-results | Out-Null; Invoke-Pester -Path .\tests -CI -OutputFormat NUnitXml -OutputFile .\artifacts\test-results\testResults.xml"`
 	persistent\network\dns_cache.txt, firewall_rules.csv
 	logs\collector.log
 	run.json
@@ -292,7 +294,39 @@ This matrix is a practical guide; exact requirements vary by org policy, OS hard
 
 SSH remoting notes (PowerShell 7+):
 - Ensure SSH is reachable and PowerShell is installed on the target (`pwsh`).
-- Use key-based auth; `-KeyFilePath` is required.
+- PowerShell remoting over SSH uses the PowerShell **SSH subsystem**. Ensure the target SSH server is configured with a `powershell` subsystem entry (OpenSSH `Subsystem` directive).
+	- On Ubuntu, add (or verify) a line like the following in **`/etc/ssh/sshd_config`** *or* a higher-precedence drop-in under **`/etc/ssh/sshd_config.d/*.conf`**:
+		- `Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile`
+	- Example `sshd_config` excerpt (Ubuntu) showing the PowerShell subsystem alongside common defaults:
+
+		```text
+		Include /etc/ssh/sshd_config.d/*.conf
+
+		KbdInteractiveAuthentication no
+		UsePAM yes
+
+		X11Forwarding yes
+		PrintMotd no
+
+		AcceptEnv LANG LC_* COLORTERM NO_COLOR
+
+		# Allow client to pass locale and color environment variables
+		# override default of no subsystems
+		Subsystem       sftp    /usr/lib/openssh/sftp-server
+		Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile
+		```
+
+	- Notes:
+		- `KbdInteractiveAuthentication no` is fine if you do not rely on keyboard-interactive auth (for example some MFA/2FA setups use it).
+		- Consider setting `X11Forwarding no` unless you explicitly need X11 forwarding.
+		- The path to `pwsh` must be correct for your system (`command -v pwsh`).
+		- Only one effective `Subsystem powershell ...` should be active (drop-in snippets can override the main file).
+	- Validate and restart:
+		- `sudo sshd -t` (syntax check)
+		- `sudo systemctl restart ssh` (or `sudo systemctl restart sshd` depending on the distro)
+
+- Privilege behavior (Linux/macOS over SSH): Forensikit will try `sudo -n` (non-interactive) to run the collection as root when possible to maximize artifact coverage.
+  If `sudo -n` is not permitted (not in sudoers, or password required), it automatically falls back to running as the SSH user.
 
 ## Testing
 

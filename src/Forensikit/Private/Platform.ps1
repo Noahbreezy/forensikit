@@ -13,3 +13,18 @@ function Get-FSKPlatform {
 
     return 'Unknown'
 }
+
+function Test-FSKIsElevated {
+    [CmdletBinding()]
+    param()
+
+    if ((Get-FSKPlatform) -ne 'Windows') { return $false }
+
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}

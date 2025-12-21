@@ -17,6 +17,12 @@ Describe 'Forensikit Unit' -Tag 'Unit' {
     }
 
     Context 'Collectors (Windows paths) produce expected outputs' {
+        BeforeEach {
+            InModuleScope Forensikit {
+                Mock -CommandName Write-Warning -MockWith { }
+            }
+        }
+
         It 'Processes collector writes processes.csv and WMI JSON (Windows)' {
             InModuleScope Forensikit {
                 $run = New-FSKRunFolder -OutputPath $global:FSK_UnitRoot -ComputerName 'UNITPROC'
@@ -112,6 +118,7 @@ Describe 'Forensikit Unit' -Tag 'Unit' {
                 $cfg = [pscustomobject]@{ Mode='Quick'; Collectors=@('EventLogs'); EventLogHours=1 }
 
                 Mock -CommandName Get-FSKPlatform -ModuleName Forensikit -MockWith { 'Windows' }
+                Mock -CommandName Test-FSKIsElevated -ModuleName Forensikit -MockWith { $true }
                 Mock -CommandName Get-WinEvent -ModuleName Forensikit -MockWith {
                     @(
                         [pscustomobject]@{ TimeCreated=(Get-Date); Id=1; LevelDisplayName='Information'; ProviderName='X'; MachineName='M'; Message='Hi' }
@@ -135,10 +142,10 @@ Describe 'Forensikit Unit' -Tag 'Unit' {
 
                 Mock -CommandName Get-FSKPlatform -ModuleName Forensikit -MockWith { 'Windows' }
 
-                $script:calls = 0
+                Mock -CommandName Test-FSKIsElevated -ModuleName Forensikit -MockWith { $true }
                 Mock -CommandName Get-WinEvent -ModuleName Forensikit -MockWith {
-                    $script:calls++
-                    if ($script:calls -eq 2) { throw 'denied' } # Security
+                    param($FilterHashtable)
+                    if ($FilterHashtable.LogName -eq 'Security') { throw 'denied' }
                     @([pscustomobject]@{ TimeCreated=(Get-Date); Id=1; LevelDisplayName='Information'; ProviderName='X'; MachineName='M'; Message='Hi' })
                 }
 

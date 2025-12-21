@@ -8,14 +8,17 @@ function Invoke-FSKLocalCollection {
         [Parameter()][ValidateSet('None','Ndjson')][string]$SiemFormat = 'None'
     )
 
-    $run = New-FSKRunFolder -OutputPath $OutputPath -ComputerName $env:COMPUTERNAME -CaseId $CaseId -RunId $RunId
+    $computer = if ($env:COMPUTERNAME -and $env:COMPUTERNAME.Trim()) { $env:COMPUTERNAME.Trim() } else { [System.Environment]::MachineName }
+    $user = if ($env:USERNAME -and $env:USERNAME.Trim()) { $env:USERNAME.Trim() } elseif ($env:USER -and $env:USER.Trim()) { $env:USER.Trim() } else { [System.Environment]::UserName }
+
+    $run = New-FSKRunFolder -OutputPath $OutputPath -ComputerName $computer -CaseId $CaseId -RunId $RunId
     $logger = New-FSKLogger -LogPath (Join-Path $run.Logs 'collector.log')
 
     $meta = [ordered]@{
         Tool        = 'Forensikit'
         Version     = '0.1.0'
-        Computer    = $env:COMPUTERNAME
-        User        = $env:USERNAME
+        Computer    = $computer
+        User        = $user
         Mode        = $CollectorConfig.Mode
         StartedUtc  = (Get-Date).ToUniversalTime().ToString('o')
         Collectors  = @($CollectorConfig.Collectors)
@@ -50,7 +53,7 @@ function Invoke-FSKLocalCollection {
         $siemPath = Export-FSKSiemNdjson -Run $run -Config $CollectorConfig -Logger $logger -NdjsonPath (Join-Path $run.Root 'siem\\events.ndjson')
     }
 
-    $zipPath = Join-Path (Split-Path $run.Root -Parent) ("$($env:COMPUTERNAME)_$($run.RunId).zip")
+    $zipPath = Join-Path (Split-Path $run.Root -Parent) ("$computer`_$($run.RunId).zip")
     New-FSKZip -SourceFolder $run.Root -ZipPath $zipPath
 
     Write-FSKLog -Logger $logger -Level INFO -Message "Run finished; ZIP: $zipPath"
@@ -90,7 +93,22 @@ function Invoke-FSKRemoteSingle {
             if (-not $SshUserName) { throw "SshUserName is required for SSH remoting" }
             if (-not $SshKeyFilePath) { throw "SshKeyFilePath is required for SSH remoting" }
 
-            $session = New-PSSession -HostName $Target -UserName $SshUserName -KeyFilePath $SshKeyFilePath -ErrorAction Stop
+            try {
+                $session = New-PSSession -HostName $Target -UserName $SshUserName -KeyFilePath $SshKeyFilePath -ErrorAction Stop
+            } catch {
+                $msg = $_.Exception.Message
+                if ($msg -match '(?i)subsystem request failed|SSH client session has ended') {
+                    $hint = @(
+                        "PowerShell SSH remoting requires the 'powershell' SSH Subsystem to be configured on the target.",
+                        "On Ubuntu, add a line like:",
+                        "  Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile",
+                        "then restart SSH: sudo systemctl restart ssh",
+                        "(Keep the existing 'Subsystem sftp ...' line.)"
+                    ) -join ' '
+                    throw "$msg $hint"
+                }
+                throw
+            }
         } else {
             $session = if ($Credential) {
                 New-PSSession -ComputerName $Target -Credential $Credential -ErrorAction Stop
@@ -125,16 +143,85 @@ function Invoke-FSKRemoteSingle {
         }
 
         $localModule = Join-Path $PSScriptRoot '..\..\Forensikit'
-        $remoteModule = Join-Path $remoteBase 'Forensikit'
-        Copy-Item -Path $localModule -Destination $remoteModule -ToSession $session -Recurse -Force
+        $localModuleContents = Join-Path $localModule '*'
+        # IMPORTANT: when remoting over SSH to Linux/macOS, the remote path is POSIX.
+        # Do not use Join-Path here (it will emit Windows-style backslashes and break Copy-Item -ToSession).
+        $remoteModule = if ($Transport -eq 'SSH') {
+            ($remoteBase.TrimEnd('/')) + '/Forensikit'
+        } else {
+            Join-Path $remoteBase 'Forensikit'
+        }
 
-        $remoteResult = Invoke-Command -Session $session -ArgumentList @($remoteModule, $CollectorConfig, $remoteBase, $CaseId, $RunId, $SiemFormat) -ScriptBlock {
-            param($remoteModule, $collectorConfig, $remoteBase, $caseId, $runId, $siemFormat)
+        Invoke-Command -Session $session -ArgumentList @($remoteModule) -ScriptBlock {
+            param($remoteModule)
+            New-Item -Path $remoteModule -ItemType Directory -Force | Out-Null
+        }
 
-            Import-Module (Join-Path $remoteModule 'Forensikit.psd1') -Force
+        Copy-Item -Path $localModuleContents -Destination $remoteModule -ToSession $session -Recurse -Force
+
+        $remoteResult = Invoke-Command -Session $session -ArgumentList @($remoteModule, $CollectorConfig, $remoteBase, $CaseId, $RunId, $SiemFormat, $Transport) -ScriptBlock {
+            param($remoteModule, $collectorConfig, $remoteBase, $caseId, $runId, $siemFormat, $transport)
+
+            $mod = Import-Module (Join-Path $remoteModule 'Forensikit.psd1') -Force -PassThru
+            if (-not $mod) { throw 'Failed to import Forensikit module on target.' }
 
             $out = Join-Path $remoteBase 'Output'
-            Invoke-FSKLocalCollection -CollectorConfig $collectorConfig -OutputPath $out -CaseId $caseId -RunId $runId -SiemFormat $siemFormat
+
+            # On Linux/macOS targets over SSH: try to elevate via non-interactive sudo first.
+            # If sudo requires a password or is unavailable, continue as the SSH user.
+            # If we do run as root, ensure artifacts are chowned back so the SSH session can copy them out.
+            $trySudo = ($transport -eq 'SSH') -and ($IsLinux -or $IsMacOS)
+            $sudoOk = $false
+            if ($trySudo) {
+                $sudo = Get-Command sudo -ErrorAction SilentlyContinue
+                if ($sudo) {
+                    & sudo -n true 2>$null
+                    if ($LASTEXITCODE -eq 0) { $sudoOk = $true }
+                }
+            }
+
+            if ($sudoOk) {
+                $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+                if (-not $pwshPath) { $pwshPath = 'pwsh' }
+
+                $payloadObj = [ordered]@{
+                    RemoteModule = $remoteModule
+                    RemoteBase   = $remoteBase
+                    Out          = $out
+                    CaseId       = $caseId
+                    RunId        = $runId
+                    SiemFormat   = $siemFormat
+                    CollectorConfig = $collectorConfig
+                }
+
+                $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($payloadObj | ConvertTo-Json -Depth 10 -Compress)))
+
+                $cmd = @"
+`$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payload'))
+`$p = `$json | ConvertFrom-Json
+`$mod = Import-Module (Join-Path `$p.RemoteModule 'Forensikit.psd1') -Force -PassThru
+if (-not `$mod) { throw 'Failed to import Forensikit module on target (sudo context).' }
+`$r = & `$mod {
+    param(`$collectorConfig, `$out, `$caseId, `$runId, `$siemFormat)
+    Invoke-FSKLocalCollection -CollectorConfig `$collectorConfig -OutputPath `$out -CaseId `$caseId -RunId `$runId -SiemFormat `$siemFormat
+} `$p.CollectorConfig `$p.Out `$p.CaseId `$p.RunId `$p.SiemFormat
+try {
+    if (`$env:SUDO_USER) {
+        & chown -R "`$env:SUDO_USER`:`$env:SUDO_USER" `$p.RemoteBase 2>`$null
+    }
+    & chmod -R u+rwX `$p.RemoteBase 2>`$null
+} catch {}
+`$r | ConvertTo-Json -Depth 10 -Compress
+"@
+
+                $raw = & sudo -n $pwshPath -NoLogo -NoProfile -NonInteractive -Command $cmd
+                return ($raw | ConvertFrom-Json)
+            }
+
+            & $mod {
+                param($collectorConfig, $out, $caseId, $runId, $siemFormat)
+                Invoke-FSKLocalCollection -CollectorConfig $collectorConfig -OutputPath $out -CaseId $caseId -RunId $runId -SiemFormat $siemFormat
+            } $collectorConfig $out $caseId $runId $siemFormat
         }
 
         $localRunFolder = Join-Path $OutputPath $remoteResult.RunId

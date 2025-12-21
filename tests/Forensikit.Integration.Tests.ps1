@@ -29,8 +29,12 @@ Describe 'Forensikit Integration' -Tag 'Integration' {
 
     AfterAll {
         if ($global:FSK_IntRoot) {
-            Remove-Item -Path $global:FSK_IntRoot -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Variable -Name FSK_IntRoot -Scope Global -ErrorAction SilentlyContinue
+            if ($env:FSK_KEEP_INTEGRATION_OUTPUT -eq '1') {
+                Write-Host "Keeping integration output at: $global:FSK_IntRoot"
+            } else {
+                Remove-Item -Path $global:FSK_IntRoot -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Variable -Name FSK_IntRoot -Scope Global -ErrorAction SilentlyContinue
+            }
         }
     }
 

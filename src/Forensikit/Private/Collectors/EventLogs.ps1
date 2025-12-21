@@ -15,8 +15,14 @@ function Invoke-FSKCollectEventLogs {
     if ($platform -eq 'Windows') {
         $startTime = (Get-Date).ToUniversalTime().AddHours(-1 * $hours)
         $logs = @('System','Security','Application')
+        $isElevated = Test-FSKIsElevated
 
         foreach ($logName in $logs) {
+            if ($logName -eq 'Security' -and -not $isElevated) {
+                Write-FSKLog -Logger $Logger -Level WARN -Message "Skipped event log: Security (requires elevated privileges or membership in 'Event Log Readers')"
+                continue
+            }
+
             try {
                 $filter = @{ LogName = $logName; StartTime = $startTime }
                 $events = Get-WinEvent -FilterHashtable $filter -ErrorAction Stop
@@ -26,7 +32,22 @@ function Invoke-FSKCollectEventLogs {
 
                 Write-FSKLog -Logger $Logger -Level INFO -Message "Collected event log: $logName (last $hours hours)"
             } catch {
-                Write-FSKLog -Logger $Logger -Level WARN -Message "Failed to collect event log: $logName" -Exception $_.Exception
+                $ex = $_.Exception
+                $exText = ($ex.Message -replace '\s+', ' ').Trim()
+                if ($exText.Length -gt 220) { $exText = $exText.Substring(0, 220) + '…' }
+
+                $hint = ''
+                if ($logName -eq 'Security') {
+                    if ($exText -match '(?i)access is denied|unauthorized|0x80070005|denied') {
+                        if ($isElevated) {
+                            $hint = " Hint: access can still be blocked by local policy/GPO; ensure the account has 'Manage auditing and security log' (SeSecurityPrivilege) and isn't restricted from reading the Security channel."
+                        } else {
+                            $hint = " Hint: run PowerShell as Administrator (elevated) or add the account to 'Event Log Readers'."
+                        }
+                    }
+                }
+
+                Write-FSKLog -Logger $Logger -Level WARN -Message "Failed to collect event log: $logName ($exText).$hint" -Exception $ex
             }
         }
 

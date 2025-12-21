@@ -297,7 +297,8 @@ Invoke-ForensicCollector @params
         return
     }
 
-    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, "Collect forensic evidence (local)")) {
+    $localComputer = if ($env:COMPUTERNAME -and $env:COMPUTERNAME.Trim()) { $env:COMPUTERNAME.Trim() } else { [System.Environment]::MachineName }
+    if ($PSCmdlet.ShouldProcess($localComputer, "Collect forensic evidence (local)")) {
         Invoke-FSKLocalCollection -CollectorConfig $fskConfig -OutputPath $OutputPath -CaseId $CaseId -SiemFormat $SiemFormat
     }
 }
