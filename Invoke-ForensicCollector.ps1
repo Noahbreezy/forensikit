@@ -56,11 +56,15 @@ param(
 
 # Host selection policy:
 # - SSH remoting requires PowerShell 7+.
-# - WinRM works on both, but if invoked from pwsh and ComputerName is used, prefer Windows PowerShell 5.1.
+# - WinRM works on PowerShell 7+ and Windows PowerShell 5.1.
+# - By default, do NOT downgrade from pwsh to Windows PowerShell; mixed SSH+WinRM scenarios require staying on pwsh.
+#   If your environment requires coordinating WinRM from Windows PowerShell 5.1, opt in via:
+#     $env:FSK_PREFER_WINPS_FOR_WINRM = '1'
 
 $isPs7Plus = ($PSVersionTable.PSVersion.Major -ge 7)
 $usingSsh = ($HostName -and $HostName.Count -gt 0) -or $KeyFilePath -or $UserName
 $usingWinRm = ($ComputerName -and $ComputerName.Count -gt 0)
+$preferWinPsForWinRm = ($env:FSK_PREFER_WINPS_FOR_WINRM -eq '1')
 
 if (-not $env:FSK_REEXEC) {
 	if ($usingSsh -and -not $isPs7Plus) {
@@ -73,7 +77,19 @@ if (-not $env:FSK_REEXEC) {
 		exit $LASTEXITCODE
 	}
 
-	if ($usingWinRm -and $isPs7Plus -and $IsWindows) {
+	if ($UseParallel -and -not $isPs7Plus) {
+		$pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+		if (-not $pwsh) {
+			throw 'PowerShell 7+ (pwsh) is required for -UseParallel. Install PowerShell 7 and ensure pwsh is on PATH.'
+		}
+		$env:FSK_REEXEC = '1'
+		& $pwsh -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath @PSBoundParameters
+		exit $LASTEXITCODE
+	}
+
+	# Optional: some environments prefer coordinating WinRM via Windows PowerShell 5.1.
+	# Never downgrade when SSH is also in use (mixed-mode requires pwsh).
+	if ($preferWinPsForWinRm -and $usingWinRm -and -not $usingSsh -and $isPs7Plus -and $IsWindows) {
 		$winPs = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
 		if ($winPs) {
 			$env:FSK_REEXEC = '1'

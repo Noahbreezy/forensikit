@@ -9,6 +9,11 @@ PowerShell-based evidence collection for incident response.
 - For SSH remoting (Linux/macOS targets, PowerShell 7+): SSH reachable and key-based auth configured.
 - To read Security Event Log on Windows, run elevated or with an account that has log read rights.
 
+Coordinator host note:
+- Forensikit works best when run from PowerShell 7+ (pwsh), including for WinRM.
+- If your environment requires coordinating WinRM from Windows PowerShell 5.1, you can opt in by setting:
+	- `$env:FSK_PREFER_WINPS_FOR_WINRM = '1'`
+
 ## Built-in help
 ```powershell
 Get-Help Invoke-ForensicCollector -Full
