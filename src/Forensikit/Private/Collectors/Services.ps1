@@ -11,7 +11,14 @@ function Invoke-FSKCollectServices {
         $platform = Get-FSKPlatform
 
         if ($platform -eq 'Windows') {
-            Get-Service | Select-Object Name, DisplayName, Status, StartType, CanPauseAndContinue, CanStop, ServiceType | Export-Csv -Path (Join-Path $outDir 'services.csv') -NoTypeInformation -Encoding UTF8
+            $serviceErrors = @()
+            $services = Get-Service -ErrorAction SilentlyContinue -ErrorVariable +serviceErrors
+            $services | Select-Object Name, DisplayName, Status, StartType, CanPauseAndContinue, CanStop, ServiceType | Export-Csv -Path (Join-Path $outDir 'services.csv') -NoTypeInformation -Encoding UTF8
+
+            if ($serviceErrors.Count -gt 0) {
+                $first = $serviceErrors[0]
+                Write-FSKLog -Logger $Logger -Level WARN -Message "Some services could not be queried (non-fatal); output may be partial. Errors: $($serviceErrors.Count)" -Exception $first.Exception
+            }
 
             try {
                 Get-CimInstance Win32_SystemDriver | Select-Object Name, DisplayName, State, Status, StartMode, PathName | Export-Csv -Path (Join-Path $outDir 'drivers.csv') -NoTypeInformation -Encoding UTF8
