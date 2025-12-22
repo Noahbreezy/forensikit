@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
 	[Parameter(Mandatory)]
@@ -53,6 +50,9 @@ param(
 	[Parameter()]
 	[bool]$MergeSiem = $true
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 # Host selection policy:
 # - SSH remoting requires PowerShell 7+.

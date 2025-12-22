@@ -198,7 +198,7 @@ function Register-FSKWindowsScheduledTask {
     $taskName = "Forensikit-$Name"
     $exe = if ($PowerShellPath) { $PowerShellPath } else { Get-FSKPowerShellPath -Preference Auto }
 
-    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$RunnerScript`""
+    $pwshArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$RunnerScript`""
     $action = New-ScheduledTaskAction -Execute $exe -Argument $args
 
     $trigger = $null
