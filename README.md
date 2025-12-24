@@ -72,6 +72,10 @@ Import-Module .\src\Forensikit\Forensikit.psd1 -Force
 Invoke-ForensicCollector -Mode Deep -HostName ubuntu01 -UserName ir -KeyFilePath $HOME\.ssh\id_ed25519 -OutputPath .\Output -Verbose
 ```
 
+Notes:
+- The `FSK_INTEGRATION_*` environment variables are used by the Pester **integration tests**. For real collections, call `Invoke-ForensicCollector` directly (as shown above).
+- For remote runs, Forensikit always downloads a ZIP per target. The module also extracts that ZIP into `Output\<RunId>\<Host>\...` so `Export-ForensikitReport` can be run against the extracted folder.
+
 ## Custom profile
 Example file: [examples/custom_profile.json](examples/custom_profile.json)
 
@@ -222,6 +226,9 @@ HTML (PowerShell 7+ recommended):
 Export-ForensikitReport -Path .\Output\20251215_224654Z -Format Html
 ```
 
+Remote run note:
+- If you ran a remote collection, point `Export-ForensikitReport` at the extracted host folder (e.g. `Output\<RunId>\<Host>`). If you only have the ZIP, extract it into a host folder first.
+
 Integration root summary (multiple runs):
 
 If you point `Export-ForensikitReport` at an integration test root folder (e.g. `Output\integration\<timestamp>_<guid>`), it produces a **summary-only** report across all run folders and hosts under that root:
@@ -348,6 +355,9 @@ This matrix is a practical guide; exact requirements vary by org policy, OS hard
 
 SSH remoting notes (PowerShell 7+):
 - Ensure SSH is reachable and PowerShell is installed on the target (`pwsh`).
+- First-time SSH connections may require accepting the target's host key. If the host key isn't trusted yet, a non-interactive run can fail until you accept it.
+	- One-time setup: `ssh <user>@<host>` and accept the prompt.
+	- Optional (less strict): set `FSK_SSH_ACCEPT_NEW_HOSTKEY=1` to auto-accept new host keys (uses `StrictHostKeyChecking=accept-new` when available).
 - PowerShell remoting over SSH uses the PowerShell **SSH subsystem**. Ensure the target SSH server is configured with a `powershell` subsystem entry (OpenSSH `Subsystem` directive).
 	- On Ubuntu, add (or verify) a line like the following in **`/etc/ssh/sshd_config`** *or* a higher-precedence drop-in under **`/etc/ssh/sshd_config.d/*.conf`**:
 		- `Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile`

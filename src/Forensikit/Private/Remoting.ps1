@@ -94,6 +94,31 @@ function Invoke-FSKRemoteSingle {
             if (-not $SshUserName) { throw "SshUserName is required for SSH remoting" }
             if (-not $SshKeyFilePath) { throw "SshKeyFilePath is required for SSH remoting" }
 
+            # Preflight to avoid ssh.exe prompting (e.g., unknown host key) which can hang a non-interactive run.
+            # This uses OpenSSH in BatchMode to fail fast with a clear error instead of prompting.
+            $sshExe = Get-Command ssh -ErrorAction SilentlyContinue
+            if ($sshExe) {
+                $strict = if ($env:FSK_SSH_ACCEPT_NEW_HOSTKEY -eq '1') { 'accept-new' } else { 'yes' }
+                $args = @(
+                    '-o', 'BatchMode=yes',
+                    '-o', ('StrictHostKeyChecking=' + $strict),
+                    '-o', 'ConnectTimeout=10',
+                    '-i', $SshKeyFilePath,
+                    ($SshUserName + '@' + $Target),
+                    'exit'
+                )
+
+                & $sshExe @args 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    $extra = if ($strict -eq 'yes') {
+                        "If this is the first time connecting, accept the SSH host key (e.g. run: ssh $SshUserName@$Target) or set FSK_SSH_ACCEPT_NEW_HOSTKEY=1 to auto-accept new host keys."
+                    } else {
+                        "SSH connectivity check failed. Verify DNS/firewall, key permissions, and that SSH is reachable."
+                    }
+                    throw "SSH preflight failed for $Target. $extra"
+                }
+            }
+
             try {
                 $session = New-PSSession -HostName $Target -UserName $SshUserName -KeyFilePath $SshKeyFilePath -ErrorAction Stop
             } catch {
@@ -239,11 +264,30 @@ try {
             Copy-Item -FromSession $session -Path $remoteResult.SiemNdjson -Destination $destSiem -Force
         }
 
+        # Remote runs pull back a ZIP; extract it so the local output layout matches local runs:
+        #   <OutputPath>\<RunId>\<Computer>\run.json ...
+        $hostFolder = Join-Path $localRunFolder $Target
+        if (-not (Test-Path $hostFolder)) { New-Item -Path $hostFolder -ItemType Directory -Force | Out-Null }
+
+        $extracted = $false
+        $extractError = $null
+        try {
+            Expand-Archive -Path $destZip -DestinationPath $hostFolder -Force
+            $extracted = $true
+        } catch {
+            $extractError = $_.Exception.Message
+            Write-Warning "Failed to extract remote ZIP for $Target into $hostFolder. You can extract manually from: $destZip. Error: $extractError"
+        }
+
         return [pscustomobject]@{
             Computer = $Target
             Zip      = $destZip
             RunId    = $remoteResult.RunId
             SiemNdjson = $destSiem
+            RunRoot  = $localRunFolder
+            Root     = $hostFolder
+            Extracted = $extracted
+            ExtractError = $extractError
         }
     } catch {
         throw

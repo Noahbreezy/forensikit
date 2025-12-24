@@ -1,15 +1,15 @@
 function Invoke-ForensicCollector {
     <#
     .SYNOPSIS
-    Collects volatile and persistent evidence from Windows endpoints (local or remote).
+    Collects volatile and persistent evidence from endpoints (local or remote).
 
     .DESCRIPTION
-    Runs locally or remotely via PowerShell Remoting. Builds a structured output folder per target,
+    Runs locally or remotely via WinRM (Windows) or SSH (PowerShell 7+). Builds a structured output folder per target,
     generates an integrity log (SHA256), and compresses results into a ZIP archive. Supports
     fan-out across many hosts via CSV and optional parallelism on PowerShell 7+.
 
     .PARAMETER Mode
-    Quick | Full | Custom. Quick/Full set built-in collector lists; Custom loads a JSON profile
+    Quick | Full | Deep | Custom. Quick/Full/Deep set built-in collector lists; Custom loads a JSON profile
     that defines Collectors and optional EventLogHours.
 
     .PARAMETER OutputPath
@@ -219,14 +219,14 @@ Invoke-ForensicCollector @params
             $name = $null
             $transport = 'Auto'
 
-            if ($row.Transport) { $transport = [string]$row.Transport }
-            $os = if ($row.OS) { [string]$row.OS } else { 'Auto' }
+            if ($row.Transport) { $transport = ([string]$row.Transport).Trim() }
+            $os = if ($row.OS) { ([string]$row.OS).Trim() } else { 'Auto' }
 
             if ($row.HostName) {
-                $name = [string]$row.HostName
+                $name = ([string]$row.HostName).Trim()
                 if ($transport -eq 'Auto' -and $os -eq 'Auto') { $transport = 'SSH' }
             } elseif ($row.ComputerName) {
-                $name = [string]$row.ComputerName
+                $name = ([string]$row.ComputerName).Trim()
             }
 
             if (-not $name -or -not $name.Trim()) { continue }
