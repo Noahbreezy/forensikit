@@ -17,6 +17,7 @@ function Invoke-FSKLocalCollection {
     $meta = [ordered]@{
         Tool        = 'Forensikit'
         Version     = '0.1.0'
+        Platform    = (Get-FSKPlatform)
         Computer    = $computer
         User        = $user
         Mode        = $CollectorConfig.Mode
@@ -50,13 +51,13 @@ function Invoke-FSKLocalCollection {
         $siemPath = Export-FSKSiemNdjson -Run $run -Config $CollectorConfig -Logger $logger -NdjsonPath (Join-Path $run.Root 'siem\\events.ndjson')
     }
 
+    $integrityPath = Join-Path $run.Root 'integrity.csv'
+    New-FSKIntegrityLog -RootPath $run.Root -IntegrityCsvPath $integrityPath
+
     $zipPath = Join-Path (Split-Path $run.Root -Parent) ("$computer`_$($run.RunId).zip")
     New-FSKZip -SourceFolder $run.Root -ZipPath $zipPath
 
     Write-FSKLog -Logger $logger -Level INFO -Message "Run finished; ZIP: $zipPath"
-
-    $integrityPath = Join-Path $run.Root 'integrity.csv'
-    New-FSKIntegrityLog -RootPath $run.Root -IntegrityCsvPath $integrityPath
 
     return [pscustomobject]@{
         RunId = $run.RunId

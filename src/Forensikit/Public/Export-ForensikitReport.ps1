@@ -56,6 +56,78 @@ function Export-ForensikitReport {
         }
     }
 
+    function Get-FSKTextLineCount {
+        param([Parameter(Mandatory)][string]$Path)
+        if (-not (Test-Path -LiteralPath $Path)) { return $null }
+        try {
+            $lines = Get-Content -LiteralPath $Path -ErrorAction Stop
+            @($lines | Where-Object { $_ -and $_.ToString().Trim() }).Count
+        } catch {
+            $null
+        }
+    }
+
+    function Get-FSKJournalEntryCount {
+        param([Parameter(Mandatory)][string]$EventLogsDir)
+
+        $jsonl = Join-Path $EventLogsDir 'journalctl_since.jsonl'
+        $txt = Join-Path $EventLogsDir 'journalctl_since.txt'
+        $syslog = Join-Path $EventLogsDir 'syslog'
+        $auth = Join-Path $EventLogsDir 'auth.log'
+
+        $c = Get-FSKTextLineCount -Path $jsonl
+        if ($null -ne $c) { return $c }
+        $c = Get-FSKTextLineCount -Path $txt
+        if ($null -ne $c) { return $c }
+
+        $total = 0
+        $any = $false
+        foreach ($p in @($syslog, $auth)) {
+            $lc = Get-FSKTextLineCount -Path $p
+            if ($null -ne $lc) { $total += $lc; $any = $true }
+        }
+        if ($any) { return $total }
+        return $null
+    }
+
+    function Get-FSKPlatformFromHostFolder {
+        param(
+            [Parameter()][object]$Meta,
+            [Parameter(Mandatory)][string]$HostFolder
+        )
+
+        if ($Meta) {
+            $platformProp = $Meta.PSObject.Properties['Platform']
+            if ($platformProp -and $platformProp.Value -and [string]$platformProp.Value) {
+                return [string]$platformProp.Value
+            }
+        }
+
+        if (Test-Path (Join-Path $HostFolder 'persistent\eventlogs\System_events.csv')) { return 'Windows' }
+        if (Test-Path (Join-Path $HostFolder 'persistent\eventlogs\journalctl_since.txt')) { return 'Linux' }
+        if (Test-Path (Join-Path $HostFolder 'persistent\eventlogs\journalctl_since.jsonl')) { return 'Linux' }
+        if (Test-Path (Join-Path $HostFolder 'persistent\eventlogs\macos_log_show.txt')) { return 'macOS' }
+        return 'Unknown'
+    }
+
+    function Format-FSKCell {
+        param([Parameter()][object]$Value)
+        if ($null -eq $Value -or ($Value -is [string] -and -not $Value.Trim())) { return 'N/A' }
+        return [string]$Value
+    }
+
+    function Get-FSKMetaValue {
+        param(
+            [Parameter()][object]$Meta,
+            [Parameter(Mandatory)][string]$Name
+        )
+
+        if (-not $Meta) { return $null }
+        $prop = $Meta.PSObject.Properties[$Name]
+        if (-not $prop) { return $null }
+        return $prop.Value
+    }
+
     function Get-FSKLogStats {
         param([Parameter(Mandatory)][string]$LogPath)
 
@@ -152,6 +224,8 @@ function Export-ForensikitReport {
             $runJson = Join-Path $hostFolder 'run.json'
             if (Test-Path $runJson) { $meta = Get-FSKSafeJson -JsonPath $runJson }
 
+            $platform = Get-FSKPlatformFromHostFolder -Meta $meta -HostFolder $hostFolder
+
             $logPath = Join-Path $hostFolder 'logs\collector.log'
             $log = Get-FSKLogStats -LogPath $logPath
 
@@ -159,23 +233,47 @@ function Export-ForensikitReport {
             $integrity = Get-FSKIntegrityStats -IntegrityCsvPath $integrityPath
             $integrityCount = $integrity.Count
             $procCount = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'volatile\processes\processes.csv')
-            $tcpCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'volatile\network\net_tcp_connections.csv')
-            $udpCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'volatile\network\net_udp_endpoints.csv')
+            $tcpCount = $null
+            $udpCount = $null
+            $sysCount = $null
+            $secCount = $null
+            $appCount = $null
 
-            $sysCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\System_events.csv')
-            $secCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\Security_events.csv')
-            $appCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\Application_events.csv')
+            $ssConnLines = $null
+            $ssListenLines = $null
+            $journalEntries = $null
 
-            $mode = if ($meta -and $meta.Mode) { [string]$meta.Mode } else { 'Unknown' }
-            $started = if ($meta -and $meta.StartedUtc) { [string]$meta.StartedUtc } else { '' }
-            $ended = if ($meta -and $meta.EndedUtc) { [string]$meta.EndedUtc } else { '' }
-            $user = if ($meta -and $meta.User) { [string]$meta.User } else { '' }
-            $version = if ($meta -and $meta.Version) { [string]$meta.Version } else { '' }
-            $collectors = if ($meta -and $meta.Collectors) { @($meta.Collectors | ForEach-Object { [string]$_ }) } else { @() }
+            if ($platform -eq 'Windows') {
+                $tcpCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'volatile\network\net_tcp_connections.csv')
+                $udpCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'volatile\network\net_udp_endpoints.csv')
+
+                $sysCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\System_events.csv')
+                $secCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\Security_events.csv')
+                $appCount  = Get-FSKCsvCount -CsvPath (Join-Path $hostFolder 'persistent\eventlogs\Application_events.csv')
+            } elseif ($platform -eq 'Linux') {
+                $ssConnLines = Get-FSKTextLineCount -Path (Join-Path $hostFolder 'volatile\network\ss_connections.txt')
+                $ssListenLines = Get-FSKTextLineCount -Path (Join-Path $hostFolder 'volatile\network\ss_listen.txt')
+                $journalEntries = Get-FSKJournalEntryCount -EventLogsDir (Join-Path $hostFolder 'persistent\eventlogs')
+            }
+
+            $modeRaw = Get-FSKMetaValue -Meta $meta -Name 'Mode'
+            $startedRaw = Get-FSKMetaValue -Meta $meta -Name 'StartedUtc'
+            $endedRaw = Get-FSKMetaValue -Meta $meta -Name 'EndedUtc'
+            $userRaw = Get-FSKMetaValue -Meta $meta -Name 'User'
+            $versionRaw = Get-FSKMetaValue -Meta $meta -Name 'Version'
+            $collectorsRaw = Get-FSKMetaValue -Meta $meta -Name 'Collectors'
+
+            $mode = if ($modeRaw) { [string]$modeRaw } else { 'Unknown' }
+            $started = if ($startedRaw) { [string]$startedRaw } else { '' }
+            $ended = if ($endedRaw) { [string]$endedRaw } else { '' }
+            $user = if ($userRaw) { [string]$userRaw } else { '' }
+            $version = if ($versionRaw) { [string]$versionRaw } else { '' }
+            $collectors = if ($collectorsRaw) { @($collectorsRaw | ForEach-Object { [string]$_ }) } else { @() }
 
             [pscustomobject]@{
                 RunId = $runId
                 Host = $hostName
+                Platform = $platform
                 Mode = $mode
                 StartedUtc = $started
                 EndedUtc = $ended
@@ -194,6 +292,9 @@ function Export-ForensikitReport {
                 SysEventCount = $sysCount
                 SecEventCount = $secCount
                 AppEventCount = $appCount
+                SsConnLines = $ssConnLines
+                SsListenLines = $ssListenLines
+                JournalEntryCount = $journalEntries
             }
         }
 
@@ -232,13 +333,90 @@ function Export-ForensikitReport {
             $md.Add('')
         }
 
-        $md.Add('## Per-host Overview')
-        $md.Add('')
-        $md.Add('| RunId | Host | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes | TCP conns | UDP endpoints | Sys events | Sec events | App events |')
-        $md.Add('|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
+        $platforms = @($summaries | Select-Object -ExpandProperty Platform -Unique)
+        $hasMixedPlatforms = $platforms.Count -gt 1
 
-        foreach ($h in ($summaries | Sort-Object RunId, Host)) {
-            $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} |' -f $h.RunId, $h.Host, $h.Mode, $h.StartedUtc, $h.EndedUtc, $h.WarnCount, $h.ErrorCount, $h.IntegrityCount, $h.IntegrityBytes, $h.ProcCount, $h.TcpCount, $h.UdpCount, $h.SysEventCount, $h.SecEventCount, $h.AppEventCount))
+        if (-not $hasMixedPlatforms) {
+            $md.Add('## Per-host Overview')
+            $md.Add('')
+        }
+
+        $windowsHosts = @($summaries | Where-Object { $_.Platform -eq 'Windows' } | Sort-Object RunId, Host)
+        if ($windowsHosts.Count -gt 0) {
+            $md.Add($(if ($hasMixedPlatforms) { '## Windows Hosts' } else { '## Per-host Overview (Windows)' }))
+            $md.Add('')
+            $md.Add('| RunId | Host | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes | TCP conns | UDP endpoints | Sys events | Sec events | App events |')
+            $md.Add('|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
+            foreach ($h in $windowsHosts) {
+                $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} | {13} | {14} |' -f
+                    $h.RunId,
+                    $h.Host,
+                    $h.Mode,
+                    $h.StartedUtc,
+                    $h.EndedUtc,
+                    $h.WarnCount,
+                    $h.ErrorCount,
+                    (Format-FSKCell $h.IntegrityCount),
+                    (Format-FSKCell $h.IntegrityBytes),
+                    (Format-FSKCell $h.ProcCount),
+                    (Format-FSKCell $h.TcpCount),
+                    (Format-FSKCell $h.UdpCount),
+                    (Format-FSKCell $h.SysEventCount),
+                    (Format-FSKCell $h.SecEventCount),
+                    (Format-FSKCell $h.AppEventCount)
+                ))
+            }
+            $md.Add('')
+        }
+
+        $linuxHosts = @($summaries | Where-Object { $_.Platform -eq 'Linux' } | Sort-Object RunId, Host)
+        if ($linuxHosts.Count -gt 0) {
+            $md.Add($(if ($hasMixedPlatforms) { '## Linux Hosts' } else { '## Per-host Overview (Linux)' }))
+            $md.Add('')
+            $md.Add('| RunId | Host | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes | ss connections (lines) | ss listen (lines) | journal entries (lines) |')
+            $md.Add('|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|')
+            foreach ($h in $linuxHosts) {
+                $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} | {12} |' -f
+                    $h.RunId,
+                    $h.Host,
+                    $h.Mode,
+                    $h.StartedUtc,
+                    $h.EndedUtc,
+                    $h.WarnCount,
+                    $h.ErrorCount,
+                    (Format-FSKCell $h.IntegrityCount),
+                    (Format-FSKCell $h.IntegrityBytes),
+                    (Format-FSKCell $h.ProcCount),
+                    (Format-FSKCell $h.SsConnLines),
+                    (Format-FSKCell $h.SsListenLines),
+                    (Format-FSKCell $h.JournalEntryCount)
+                ))
+            }
+            $md.Add('')
+        }
+
+        $otherHosts = @($summaries | Where-Object { $_.Platform -ne 'Windows' -and $_.Platform -ne 'Linux' } | Sort-Object Platform, RunId, Host)
+        if ($otherHosts.Count -gt 0) {
+            $md.Add('## Other Hosts')
+            $md.Add('')
+            $md.Add('| RunId | Host | Platform | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes |')
+            $md.Add('|---|---|---|---|---|---|---:|---:|---:|---:|---:|')
+            foreach ($h in $otherHosts) {
+                $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} |' -f
+                    $h.RunId,
+                    $h.Host,
+                    $h.Platform,
+                    $h.Mode,
+                    $h.StartedUtc,
+                    $h.EndedUtc,
+                    $h.WarnCount,
+                    $h.ErrorCount,
+                    (Format-FSKCell $h.IntegrityCount),
+                    (Format-FSKCell $h.IntegrityBytes),
+                    (Format-FSKCell $h.ProcCount)
+                ))
+            }
+            $md.Add('')
         }
 
         $md.Add('')
@@ -253,10 +431,11 @@ function Export-ForensikitReport {
             return ($md -join $nl)
         }
 
-        foreach ($h in ($summaries | Sort-Object RunId, Host)) {
+        foreach ($h in ($summaries | Sort-Object Platform, RunId, Host)) {
             $md.Add(('## Host: {0}' -f $h.Host))
             $md.Add('')
             $md.Add(('- RunId: {0}' -f $h.RunId))
+            $md.Add(('- Platform: {0}' -f $h.Platform))
             $md.Add(('- Mode: {0}' -f $h.Mode))
             if ($h.Version) { $md.Add(('- Tool version: {0}' -f $h.Version)) }
             if ($h.User) { $md.Add(('- User: {0}' -f $h.User)) }
@@ -267,9 +446,25 @@ function Export-ForensikitReport {
             $md.Add('')
             $md.Add('### Key files')
             $md.Add('')
-            $md.Add(('- integrity.csv rows: {0}' -f $h.IntegrityCount))
-            $md.Add(('- integrity.csv bytes: {0}' -f $h.IntegrityBytes))
+            $md.Add(('- integrity.csv rows: {0}' -f (Format-FSKCell $h.IntegrityCount)))
+            $md.Add(('- integrity.csv bytes: {0}' -f (Format-FSKCell $h.IntegrityBytes)))
             $md.Add('')
+
+            if ($h.Platform -eq 'Windows') {
+                $md.Add('### Windows highlights')
+                $md.Add('')
+                $md.Add(('- TCP connections rows: {0}' -f (Format-FSKCell $h.TcpCount)))
+                $md.Add(('- UDP endpoints rows: {0}' -f (Format-FSKCell $h.UdpCount)))
+                $md.Add(('- Event log rows (System/Security/Application): {0}/{1}/{2}' -f (Format-FSKCell $h.SysEventCount), (Format-FSKCell $h.SecEventCount), (Format-FSKCell $h.AppEventCount)))
+                $md.Add('')
+            } elseif ($h.Platform -eq 'Linux') {
+                $md.Add('### Linux highlights')
+                $md.Add('')
+                $md.Add(('- ss_connections.txt non-empty lines: {0}' -f (Format-FSKCell $h.SsConnLines)))
+                $md.Add(('- ss_listen.txt non-empty lines: {0}' -f (Format-FSKCell $h.SsListenLines)))
+                $md.Add(('- journal entries (best-effort line count): {0}' -f (Format-FSKCell $h.JournalEntryCount)))
+                $md.Add('')
+            }
             if ($h.IntegrityLargest -and $h.IntegrityLargest.Count -gt 0) {
                 $md.Add('### Largest collected files')
                 $md.Add('')
