@@ -182,10 +182,6 @@ Output\20251215_224654Z\MERCURY\
 	persistent\tasks\scheduled_tasks.csv/json
 	persistent\registry\autoruns.csv
 	persistent\software\installed_software.csv
-
-Pester test runs can emit an NUnit-style XML report for CI consumption. To keep these artifacts untracked, write them under `artifacts\test-results\`:
-
-`pwsh -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path .\artifacts\test-results | Out-Null; Invoke-Pester -Path .\tests -CI -OutputFormat NUnitXml -OutputFile .\artifacts\test-results\testResults.xml"`
 	persistent\network\dns_cache.txt, firewall_rules.csv
 	logs\collector.log
 	run.json
@@ -193,10 +189,46 @@ Pester test runs can emit an NUnit-style XML report for CI consumption. To keep 
 	siem\events.ndjson
 Output\20251215_224654Z\MERCURY_20251215_224654Z.zip
 
+```
+
+Pester test runs can emit an NUnit-style XML report for CI consumption. To keep these artifacts untracked, write them under `artifacts\test-results\`:
+
+`pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester -RequiredVersion 5.7.1 -Force; New-Item -ItemType Directory -Force -Path .\artifacts\test-results | Out-Null; $config = New-PesterConfiguration; $config.Run.Path = '.\tests'; $config.Output.Verbosity = 'Detailed'; $config.TestResult.Enabled = $true; $config.TestResult.OutputFormat = 'NUnitXml'; $config.TestResult.OutputPath = '.\artifacts\test-results\testResults.xml'; Invoke-Pester -Configuration $config"`
+
 If SIEM output is enabled for a multi-host run, a merged file is also produced:
 ```
 Output\20251215_224654Z\siem\merged.ndjson
 ```
+
+## Human-readable report
+
+Forensikit can generate a Markdown (or HTML) report from existing output folders.
+
+Markdown (works on all supported PowerShell versions):
+
+```powershell
+Import-Module .\src\Forensikit\Forensikit.psd1 -Force
+
+# Run folder (contains one or more host folders)
+Export-ForensikitReport -Path .\Output\20251215_224654Z
+
+# Or per-host folder
+Export-ForensikitReport -Path .\Output\20251215_224654Z\MERCURY
+```
+
+HTML (PowerShell 7+ recommended):
+
+```powershell
+Export-ForensikitReport -Path .\Output\20251215_224654Z -Format Html
+```
+
+Integration root summary (multiple runs):
+
+If you point `Export-ForensikitReport` at an integration test root folder (e.g. `Output\integration\<timestamp>_<guid>`), it produces a **summary-only** report across all run folders and hosts under that root:
+
+```powershell
+Export-ForensikitReport -Path .\Output\integration\20251224_174424Z_05fcec0a-feef-4737-b9ec-785da53c3249
+Export-ForensikitReport -Path .\Output\integration\20251224_174424Z_05fcec0a-feef-4737-b9ec-785da53c3249 -Format Html
 ```
 
 ## Parameters (high level)
@@ -376,6 +408,18 @@ Optional remote integration (fan-out) environment variables:
 - `FSK_INTEGRATION_TRANSPORT` (`WinRM` or `SSH`)
 - `FSK_INTEGRATION_SSH_USER` (for SSH)
 - `FSK_INTEGRATION_SSH_KEY` (for SSH; path to private key file)
+
+Additional integration toggles:
+- `FSK_INTEGRATION_LOCAL_MODES` (comma-separated list; defaults to `Quick,Deep`)
+- `FSK_INTEGRATION_REMOTE_MODES` (comma-separated list; defaults to `Quick`)
+- `FSK_INTEGRATION_REPORT_FORMAT` (`Markdown`, `Html`, or `Both`; defaults to `Markdown`)
+- `FSK_KEEP_INTEGRATION_OUTPUT` (`1` keep, `0` delete; defaults to `1`)
+
+Integration artifacts are written under `Output\integration\<timestamp>_<guid>\`.
+
+When `FSK_INTEGRATION_REPORT_FORMAT` includes Markdown and/or HTML, integration tests also generate an integration-root summary report:
+- `Output\integration\<timestamp>_<guid>\report.md`
+- `Output\integration\<timestamp>_<guid>\report.html`
 
 ## Rubric justification (project notes)
 

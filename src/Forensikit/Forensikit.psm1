@@ -24,5 +24,6 @@ $script:ModuleRoot = $PSScriptRoot
 
 . "$script:ModuleRoot\Public\Invoke-ForensicCollector.ps1"
 . "$script:ModuleRoot\Public\New-ForensikitCustomProfile.ps1"
+. "$script:ModuleRoot\Public\Export-ForensikitReport.ps1"
 . "$script:ModuleRoot\Public\Register-ForensikitSchedule.ps1"
 . "$script:ModuleRoot\Public\Unregister-ForensikitSchedule.ps1"

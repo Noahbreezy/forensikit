@@ -11,6 +11,7 @@
     FunctionsToExport = @(
         'Invoke-ForensicCollector',
         'New-ForensikitCustomProfile',
+        'Export-ForensikitReport',
         'Register-ForensikitSchedule',
         'Unregister-ForensikitSchedule'
     )

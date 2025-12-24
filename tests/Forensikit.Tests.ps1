@@ -178,6 +178,46 @@ Describe 'Forensikit MVP' {
         }
     }
 
+    It 'Exports a human-readable Markdown report from a run folder' {
+        InModuleScope Forensikit {
+            $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmssZ')
+            $runId = "REPORT_$stamp"
+
+            $run = New-FSKRunFolder -OutputPath $global:FSK_TestRoot -ComputerName 'HOSTREPORT' -RunId $runId
+
+            # Minimal run.json and collector.log to simulate a completed run
+            $meta = [ordered]@{
+                Tool = 'Forensikit'
+                Version = '0.1.0'
+                Computer = 'HOSTREPORT'
+                User = 'tester'
+                Mode = 'Quick'
+                StartedUtc = (Get-Date).ToUniversalTime().AddMinutes(-1).ToString('o')
+                EndedUtc = (Get-Date).ToUniversalTime().ToString('o')
+                Collectors = @('Processes','Network','Users','EventLogs')
+            }
+            ($meta | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path $run.Root 'run.json') -Encoding UTF8
+            @(
+                "$(Get-Date -AsUTC -Format o) [INFO] Run started",
+                "$(Get-Date -AsUTC -Format o) [WARN] Security log access denied",
+                "$(Get-Date -AsUTC -Format o) [INFO] Run finished"
+            ) | Out-File -FilePath (Join-Path $run.Logs 'collector.log') -Encoding UTF8
+
+            # Create a tiny CSV so the report can count something
+            @([pscustomobject]@{ ProcessName = 'a'; Id = 1 }) | Export-Csv -Path (Join-Path $run.Volatile 'processes\processes.csv') -NoTypeInformation -Encoding UTF8
+
+            # Integrity inventory
+            New-FSKIntegrityLog -RootPath $run.Root -IntegrityCsvPath (Join-Path $run.Root 'integrity.csv')
+
+            $runFolder = Join-Path $global:FSK_TestRoot $runId
+            $out = Export-ForensikitReport -Path $runFolder
+
+            (Test-Path $out) | Should -BeTrue
+            (Get-Content -Path $out -Raw -Encoding UTF8) | Should -Match '# Forensikit Report'
+            (Get-Content -Path $out -Raw -Encoding UTF8) | Should -Match 'HOSTREPORT'
+        }
+    }
+
     It 'Creates a custom profile JSON from a built-in mode' {
         InModuleScope Forensikit {
             $outProfile = Join-Path $global:FSK_TestRoot 'generated_profile.json'

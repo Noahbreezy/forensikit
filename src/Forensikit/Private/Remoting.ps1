@@ -279,6 +279,8 @@ function Invoke-FSKRemoteFanout {
 
     # Preflight: If SSH targets are requested but prerequisites are missing locally, return per-host errors
     if ($HostNameTargets -and $HostNameTargets.Count -gt 0) {
+        if ($SshKeyFilePath) { $SshKeyFilePath = $SshKeyFilePath.Trim().Trim('"').Trim("'") }
+
         if ($PSVersionTable.PSVersion.Major -lt 7) {
             foreach ($h in $HostNameTargets) {
                 $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires PowerShell 7+ on the coordinator host' })
@@ -290,7 +292,7 @@ function Invoke-FSKRemoteFanout {
                 $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires -UserName and -KeyFilePath' })
             }
             $Targets = @($Targets | Where-Object { $HostNameTargets -notcontains $_ })
-        } elseif (-not (Test-Path $SshKeyFilePath)) {
+        } elseif (-not (Test-Path -LiteralPath $SshKeyFilePath)) {
             foreach ($h in $HostNameTargets) {
                 $results.Add([pscustomobject]@{ Computer = $h; Error = "SSH key file not found: $SshKeyFilePath" })
             }

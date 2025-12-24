@@ -22,15 +22,15 @@ function Invoke-FSKCollectRegistry {
 
             foreach ($t in $targets) {
                 try {
-                    if (-not (Test-Path $t)) { continue }
-                    if ((Get-Item $t).PSIsContainer) {
-                        Get-ChildItem -Path $t -File -ErrorAction SilentlyContinue | Select-Object -First 200 | ForEach-Object {
+                    if (-not (Test-Path -LiteralPath $t)) { continue }
+                    if ((Get-Item -LiteralPath $t -ErrorAction Stop).PSIsContainer) {
+                        Get-ChildItem -LiteralPath $t -File -ErrorAction SilentlyContinue | Select-Object -First 200 | ForEach-Object {
                             try {
                                 Get-Content -Path $_.FullName -ErrorAction Stop | Out-File -FilePath (Join-Path $outDir (($_.Name -replace '[^a-zA-Z0-9_.-]','_') + '.txt')) -Encoding UTF8
                             } catch { }
                         }
                     } else {
-                        Get-Content -Path $t -ErrorAction SilentlyContinue | Out-File -FilePath (Join-Path $outDir (Split-Path $t -Leaf)) -Encoding UTF8
+                        Get-Content -LiteralPath $t -ErrorAction SilentlyContinue | Out-File -FilePath (Join-Path $outDir (Split-Path $t -Leaf)) -Encoding UTF8
                     }
                 } catch { }
             }
@@ -41,13 +41,13 @@ function Invoke-FSKCollectRegistry {
                 foreach ($f in @('.profile','.bash_profile','.bashrc','.zshrc','.zprofile','.config/autostart')) {
                     $p = Join-Path $userDir $f
                     try {
-                        if (Test-Path $p) {
-                            if ((Get-Item $p).PSIsContainer) {
-                                Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue | ForEach-Object {
+                        if (Test-Path -LiteralPath $p) {
+                            if ((Get-Item -LiteralPath $p -ErrorAction Stop).PSIsContainer) {
+                                Get-ChildItem -LiteralPath $p -File -ErrorAction SilentlyContinue | ForEach-Object {
                                     try { Get-Content -Path $_.FullName -ErrorAction Stop | Out-File -FilePath (Join-Path $outDir ('user_autostart_' + $_.Name + '.txt')) -Encoding UTF8 } catch { }
                                 }
                             } else {
-                                Get-Content -Path $p -ErrorAction SilentlyContinue | Out-File -FilePath (Join-Path $outDir ('user_' + (Split-Path $p -Leaf) + '.txt')) -Encoding UTF8
+                                Get-Content -LiteralPath $p -ErrorAction SilentlyContinue | Out-File -FilePath (Join-Path $outDir ('user_' + (Split-Path $p -Leaf) + '.txt')) -Encoding UTF8
                             }
                         }
                     } catch { }
