@@ -80,6 +80,8 @@ function Invoke-FSKRemoteSingle {
         [Parameter()][System.Management.Automation.PSCredential]$Credential,
         [Parameter()][string]$SshUserName,
         [Parameter()][string]$SshKeyFilePath,
+        [Parameter()][string]$TargetSshUserName,
+        [Parameter()][string]$TargetSshKeyFilePath,
         [Parameter()][ValidateSet('None','Ndjson')][string]$SiemFormat = 'None'
     )
 
@@ -91,49 +93,86 @@ function Invoke-FSKRemoteSingle {
             if ($PSVersionTable.PSVersion.Major -lt 7) {
                 throw "SSH remoting requires PowerShell 7+"
             }
-            if (-not $SshUserName) { throw "SshUserName is required for SSH remoting" }
-            if (-not $SshKeyFilePath) { throw "SshKeyFilePath is required for SSH remoting" }
 
-            # Preflight to avoid ssh.exe prompting (e.g., unknown host key) which can hang a non-interactive run.
-            # This uses OpenSSH in BatchMode to fail fast with a clear error instead of prompting.
-            $sshExe = Get-Command ssh -ErrorAction SilentlyContinue
-            if ($sshExe) {
-                $strict = if ($env:FSK_SSH_ACCEPT_NEW_HOSTKEY -eq '1') { 'accept-new' } else { 'yes' }
-                $args = @(
-                    '-o', 'BatchMode=yes',
-                    '-o', ('StrictHostKeyChecking=' + $strict),
-                    '-o', 'ConnectTimeout=10',
-                    '-i', $SshKeyFilePath,
-                    ($SshUserName + '@' + $Target),
-                    'exit'
-                )
+            if ($SshKeyFilePath) { $SshKeyFilePath = $SshKeyFilePath.Trim().Trim('"').Trim("'") }
+            if ($TargetSshKeyFilePath) { $TargetSshKeyFilePath = $TargetSshKeyFilePath.Trim().Trim('"').Trim("'") }
 
-                & $sshExe @args 2>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) {
-                    $extra = if ($strict -eq 'yes') {
-                        "If this is the first time connecting, accept the SSH host key (e.g. run: ssh $SshUserName@$Target) or set FSK_SSH_ACCEPT_NEW_HOSTKEY=1 to auto-accept new host keys."
-                    } else {
-                        "SSH connectivity check failed. Verify DNS/firewall, key permissions, and that SSH is reachable."
+            $primaryUser = if ($TargetSshUserName -and $TargetSshUserName.Trim()) { $TargetSshUserName.Trim() } else { $SshUserName }
+            $primaryKey = if ($TargetSshKeyFilePath -and $TargetSshKeyFilePath.Trim()) { $TargetSshKeyFilePath } else { $SshKeyFilePath }
+            $fallbackUser = if ($SshUserName -and $SshUserName.Trim()) { $SshUserName.Trim() } else { $null }
+            $fallbackKey = if ($SshKeyFilePath -and $SshKeyFilePath.Trim()) { $SshKeyFilePath } else { $null }
+
+            if (-not $primaryUser) { throw "SshUserName is required for SSH remoting (provide -UserName or CSV UserName)" }
+            if (-not $primaryKey) { throw "SshKeyFilePath is required for SSH remoting (provide -KeyFilePath or CSV KeyFilePath)" }
+
+            $hasOverride = ($TargetSshUserName -and $TargetSshUserName.Trim()) -or ($TargetSshKeyFilePath -and $TargetSshKeyFilePath.Trim())
+            $canFallback = $hasOverride -and $fallbackUser -and $fallbackKey -and (($primaryUser -ne $fallbackUser) -or ($primaryKey -ne $fallbackKey))
+
+            $attempts = New-Object System.Collections.Generic.List[object]
+            $attempts.Add([pscustomobject]@{ User = $primaryUser; Key = $primaryKey; Label = 'primary' })
+            if ($canFallback) {
+                $attempts.Add([pscustomobject]@{ User = $fallbackUser; Key = $fallbackKey; Label = 'fallback' })
+            }
+
+            $lastError = $null
+            $subsystemHint = $null
+
+            foreach ($a in $attempts) {
+                if (-not (Test-Path -LiteralPath $a.Key)) {
+                    $lastError = "SSH key file not found: $($a.Key)"
+                    continue
+                }
+
+                # Preflight to avoid ssh.exe prompting (e.g., unknown host key) which can hang a non-interactive run.
+                # This uses OpenSSH in BatchMode to fail fast with a clear error instead of prompting.
+                $sshExe = Get-Command ssh -ErrorAction SilentlyContinue
+                if ($sshExe) {
+                    $strict = if ($env:FSK_SSH_ACCEPT_NEW_HOSTKEY -eq '1') { 'accept-new' } else { 'yes' }
+                    $args = @(
+                        '-o', 'BatchMode=yes',
+                        '-o', ('StrictHostKeyChecking=' + $strict),
+                        '-o', 'ConnectTimeout=10',
+                        '-i', $a.Key,
+                        ($a.User + '@' + $Target),
+                        'exit'
+                    )
+
+                    & $sshExe @args 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        $extra = if ($strict -eq 'yes') {
+                            "If this is the first time connecting, accept the SSH host key (e.g. run: ssh $($a.User)@$Target) or set FSK_SSH_ACCEPT_NEW_HOSTKEY=1 to auto-accept new host keys."
+                        } else {
+                            'SSH connectivity check failed. Verify DNS/firewall, key permissions, and that SSH is reachable.'
+                        }
+                        $lastError = "SSH preflight failed for $Target ($($a.Label) attempt). $extra"
+                        continue
                     }
-                    throw "SSH preflight failed for $Target. $extra"
+                }
+
+                try {
+                    $session = New-PSSession -HostName $Target -UserName $a.User -KeyFilePath $a.Key -ErrorAction Stop
+                    $lastError = $null
+                    break
+                } catch {
+                    $msg = $_.Exception.Message
+                    $lastError = $msg
+                    if ($msg -match '(?i)subsystem request failed|SSH client session has ended') {
+                        $subsystemHint = @(
+                            "PowerShell SSH remoting requires the 'powershell' SSH Subsystem to be configured on the target.",
+                            'On Ubuntu, add a line like:',
+                            '  Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile',
+                            'then restart SSH: sudo systemctl restart ssh',
+                            "(Keep the existing 'Subsystem sftp ...' line.)"
+                        ) -join ' '
+                    }
                 }
             }
 
-            try {
-                $session = New-PSSession -HostName $Target -UserName $SshUserName -KeyFilePath $SshKeyFilePath -ErrorAction Stop
-            } catch {
-                $msg = $_.Exception.Message
-                if ($msg -match '(?i)subsystem request failed|SSH client session has ended') {
-                    $hint = @(
-                        "PowerShell SSH remoting requires the 'powershell' SSH Subsystem to be configured on the target.",
-                        "On Ubuntu, add a line like:",
-                        "  Subsystem powershell /usr/bin/pwsh -sshs -NoLogo -NoProfile",
-                        "then restart SSH: sudo systemctl restart ssh",
-                        "(Keep the existing 'Subsystem sftp ...' line.)"
-                    ) -join ' '
-                    throw "$msg $hint"
+            if (-not $session) {
+                if ($subsystemHint) {
+                    throw "$lastError $subsystemHint"
                 }
-                throw
+                throw $lastError
             }
         } else {
             $session = if ($Credential) {
@@ -315,6 +354,7 @@ function Invoke-FSKRemoteFanout {
         [Parameter()][string[]]$HostNameTargets,
         [Parameter()][string]$SshUserName,
         [Parameter()][string]$SshKeyFilePath,
+        [Parameter()][hashtable]$SshTargetOptions,
         [Parameter()][ValidateSet('None','Ndjson')][string]$SiemFormat = 'None'
     )
 
@@ -322,7 +362,32 @@ function Invoke-FSKRemoteFanout {
 
     $canParallel = $UseParallel.IsPresent -and ($PSVersionTable.PSVersion.Major -ge 7)
 
-    # Preflight: If SSH targets are requested but prerequisites are missing locally, return per-host errors
+    # Normalize SSH options (avoid mutating caller hashtable and ensure clean strings for -Parallel serialization).
+    $sshOptMap = @{}
+    if ($SshTargetOptions) {
+        foreach ($k in $SshTargetOptions.Keys) {
+            $v = $SshTargetOptions[$k]
+            $u = $null
+            $p = $null
+
+            if ($v -is [hashtable]) {
+                if ($v.ContainsKey('UserName')) { $u = [string]$v['UserName'] }
+                if ($v.ContainsKey('KeyFilePath')) { $p = [string]$v['KeyFilePath'] }
+            } else {
+                if ($v.PSObject.Properties.Name -contains 'UserName') { $u = [string]$v.UserName }
+                if ($v.PSObject.Properties.Name -contains 'KeyFilePath') { $p = [string]$v.KeyFilePath }
+            }
+
+            if ($u) { $u = $u.Trim() }
+            if ($p) { $p = $p.Trim().Trim('"').Trim("'") }
+
+            if (($u -and $u.Trim()) -or ($p -and $p.Trim())) {
+                $sshOptMap[[string]$k] = @{ UserName = $u; KeyFilePath = $p }
+            }
+        }
+    }
+
+    # Preflight: validate SSH prerequisites per-host (so CSV per-target creds can override command-level defaults).
     if ($HostNameTargets -and $HostNameTargets.Count -gt 0) {
         if ($SshKeyFilePath) { $SshKeyFilePath = $SshKeyFilePath.Trim().Trim('"').Trim("'") }
 
@@ -330,18 +395,40 @@ function Invoke-FSKRemoteFanout {
             foreach ($h in $HostNameTargets) {
                 $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires PowerShell 7+ on the coordinator host' })
             }
-            # Remove SSH targets from execution set
             $Targets = @($Targets | Where-Object { $HostNameTargets -notcontains $_ })
-        } elseif (-not $SshUserName -or -not $SshKeyFilePath) {
+        } else {
             foreach ($h in $HostNameTargets) {
-                $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires -UserName and -KeyFilePath' })
+                $opt = if ($sshOptMap.ContainsKey($h)) { $sshOptMap[$h] } else { $null }
+
+                $user = if ($opt -and $opt['UserName'] -and $opt['UserName'].Trim()) { $opt['UserName'].Trim() } else { $SshUserName }
+                $key = if ($opt -and $opt['KeyFilePath'] -and $opt['KeyFilePath'].Trim()) { $opt['KeyFilePath'] } else { $SshKeyFilePath }
+
+                # If the CSV provides an override key but it doesn't exist locally, fall back to command-level key if available.
+                if ($opt -and $opt['KeyFilePath'] -and $opt['KeyFilePath'].Trim() -and (-not (Test-Path -LiteralPath $opt['KeyFilePath']))) {
+                    if ($SshKeyFilePath -and (Test-Path -LiteralPath $SshKeyFilePath)) {
+                        $sshOptMap[$h]['KeyFilePath'] = $null
+                        $key = $SshKeyFilePath
+                    }
+                }
+
+                if (-not $user -or -not $user.Trim()) {
+                    $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires a username (provide -UserName or CSV UserName)' })
+                    $Targets = @($Targets | Where-Object { $_ -ne $h })
+                    continue
+                }
+
+                if (-not $key -or -not $key.Trim()) {
+                    $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires a key file path (provide -KeyFilePath or CSV KeyFilePath)' })
+                    $Targets = @($Targets | Where-Object { $_ -ne $h })
+                    continue
+                }
+
+                if (-not (Test-Path -LiteralPath $key)) {
+                    $results.Add([pscustomobject]@{ Computer = $h; Error = "SSH key file not found: $key" })
+                    $Targets = @($Targets | Where-Object { $_ -ne $h })
+                    continue
+                }
             }
-            $Targets = @($Targets | Where-Object { $HostNameTargets -notcontains $_ })
-        } elseif (-not (Test-Path -LiteralPath $SshKeyFilePath)) {
-            foreach ($h in $HostNameTargets) {
-                $results.Add([pscustomobject]@{ Computer = $h; Error = "SSH key file not found: $SshKeyFilePath" })
-            }
-            $Targets = @($Targets | Where-Object { $HostNameTargets -notcontains $_ })
         }
     }
 
@@ -352,9 +439,35 @@ function Invoke-FSKRemoteFanout {
     if ($canParallel) {
         $parallelResults = $Targets | ForEach-Object -Parallel {
             try {
-                Import-Module (Join-Path $using:PSScriptRoot '..\Forensikit.psd1') -Force
+                $mod = Import-Module (Join-Path $using:PSScriptRoot '..\Forensikit.psd1') -Force -PassThru
                 $transport = if ($using:HostNameTargets -and ($using:HostNameTargets -contains $_)) { 'SSH' } else { 'WinRM' }
-                Invoke-FSKRemoteSingle -Target $_ -Transport $transport -CollectorConfig $using:CollectorConfig -OutputPath $using:OutputPath -CaseId $using:CaseId -RunId $using:RunId -Credential $using:Credential -SshUserName $using:SshUserName -SshKeyFilePath $using:SshKeyFilePath -SiemFormat $using:SiemFormat
+
+                $targetUser = $null
+                $targetKey = $null
+                $map = $using:sshOptMap
+                if ($transport -eq 'SSH' -and $map -and $map.ContainsKey($_)) {
+                    $o = $map[$_]
+                    if ($o -and $o.ContainsKey('UserName')) { $targetUser = [string]$o['UserName'] }
+                    if ($o -and $o.ContainsKey('KeyFilePath')) { $targetKey = [string]$o['KeyFilePath'] }
+                }
+
+                & $mod {
+                    param(
+                        $Target,
+                        $Transport,
+                        $CollectorConfig,
+                        $OutputPath,
+                        $CaseId,
+                        $RunId,
+                        [pscredential]$Credential,
+                        $SshUserName,
+                        $SshKeyFilePath,
+                        $TargetSshUserName,
+                        $TargetSshKeyFilePath,
+                        $SiemFormat
+                    )
+                    Invoke-FSKRemoteSingle -Target $Target -Transport $Transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -TargetSshUserName $TargetSshUserName -TargetSshKeyFilePath $TargetSshKeyFilePath -SiemFormat $SiemFormat
+                } $_ $transport $using:CollectorConfig $using:OutputPath $using:CaseId $using:RunId $using:Credential $using:SshUserName $using:SshKeyFilePath $targetUser $targetKey $using:SiemFormat
             } catch {
                 [pscustomobject]@{ Computer = $_; Error = $_.Exception.Message }
             }
@@ -366,7 +479,16 @@ function Invoke-FSKRemoteFanout {
         foreach ($t in $Targets) {
             try {
                 $transport = if ($HostNameTargets -and ($HostNameTargets -contains $t)) { 'SSH' } else { 'WinRM' }
-                $results.Add((Invoke-FSKRemoteSingle -Target $t -Transport $transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -SiemFormat $SiemFormat))
+
+                $targetUser = $null
+                $targetKey = $null
+                if ($transport -eq 'SSH' -and $sshOptMap -and $sshOptMap.ContainsKey($t)) {
+                    $o = $sshOptMap[$t]
+                    if ($o -and $o.ContainsKey('UserName')) { $targetUser = [string]$o['UserName'] }
+                    if ($o -and $o.ContainsKey('KeyFilePath')) { $targetKey = [string]$o['KeyFilePath'] }
+                }
+
+                $results.Add((Invoke-FSKRemoteSingle -Target $t -Transport $transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -TargetSshUserName $targetUser -TargetSshKeyFilePath $targetKey -SiemFormat $SiemFormat))
             } catch {
                 $results.Add([pscustomobject]@{ Computer = $t; Error = $_.Exception.Message })
             }

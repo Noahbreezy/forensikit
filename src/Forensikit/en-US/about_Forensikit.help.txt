@@ -60,6 +60,13 @@ CSV FORMAT (MIXED OS)
       - HostName (SSH target)
       - OS: Windows | Linux | macOS | Auto
       - Transport: WinRM | SSH | Auto
+    Optional SSH per-target overrides:
+      - UserName (SSH username override; empty string means no override)
+      - KeyFilePath (SSH private key path override; empty string means no override)
+    SSH credential precedence and fallback:
+      1) If a CSV row specifies UserName and/or KeyFilePath, Forensikit attempts those first.
+      2) If that attempt fails and you also provided -UserName and -KeyFilePath on the command, it retries once using the command-level values.
+      3) If the CSV override fields are empty/missing, Forensikit uses the command-level -UserName/-KeyFilePath.
     See examples/targets.csv.
 
 OUTPUT STRUCTURE

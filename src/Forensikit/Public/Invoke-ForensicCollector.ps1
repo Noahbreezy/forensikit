@@ -22,7 +22,11 @@ function Invoke-ForensicCollector {
     One or more remote computers to collect from via PowerShell Remoting (WinRM). Best supported for Windows targets.
 
     .PARAMETER ComputerListCsv
-    Path to CSV containing a ComputerName column. Rows with empty names are ignored.
+        Path to CSV containing a ComputerName (WinRM) and/or HostName (SSH) column. Rows with empty names are ignored.
+        Optional SSH per-target override columns:
+            - UserName: SSH username override (empty string means no override)
+            - KeyFilePath: SSH private key path override (empty string means no override)
+        If CSV overrides are present, Forensikit attempts those first and falls back to the command-level -UserName/-KeyFilePath once if provided.
 
     .PARAMETER Credential
     Credential for remote collection. If omitted, current credentials are used.
@@ -208,6 +212,7 @@ Invoke-ForensicCollector @params
 
     $winrmTargets = New-Object System.Collections.Generic.List[string]
     $sshTargets = New-Object System.Collections.Generic.List[string]
+    $sshTargetOptions = @{}
 
     if ($ComputerListCsv) {
         $csv = Import-Csv -Path $ComputerListCsv
@@ -245,6 +250,30 @@ Invoke-ForensicCollector @params
 
             if ($transport -match '^(?i)ssh$') {
                 $sshTargets.Add($name.Trim())
+
+                # Optional per-target SSH overrides:
+                # - UserName / KeyFilePath (preferred)
+                # - SshUserName / SshKeyFilePath (also accepted)
+                $rowUser = $null
+                $rowKey = $null
+
+                $pUser = $row.PSObject.Properties['UserName']
+                $pSshUser = $row.PSObject.Properties['SshUserName']
+                $pKey = $row.PSObject.Properties['KeyFilePath']
+                $pSshKey = $row.PSObject.Properties['SshKeyFilePath']
+
+                if ($pUser) { $rowUser = [string]$pUser.Value }
+                elseif ($pSshUser) { $rowUser = [string]$pSshUser.Value }
+
+                if ($pKey) { $rowKey = [string]$pKey.Value }
+                elseif ($pSshKey) { $rowKey = [string]$pSshKey.Value }
+
+                if ($rowUser) { $rowUser = $rowUser.Trim() }
+                if ($rowKey) { $rowKey = $rowKey.Trim().Trim('"').Trim("'") }
+
+                if (($rowUser -and $rowUser.Trim()) -or ($rowKey -and $rowKey.Trim())) {
+                    $sshTargetOptions[$name.Trim()] = @{ UserName = $rowUser; KeyFilePath = $rowKey }
+                }
             } else {
                 $winrmTargets.Add($name.Trim())
             }
@@ -281,7 +310,7 @@ Invoke-ForensicCollector @params
             $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmssZ')
             $runId = if ($CaseId) { "$CaseId`_$stamp" } else { $stamp }
 
-            $results = Invoke-FSKRemoteFanout -Targets $targets -CollectorConfig $fskConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $runId -Credential $Credential -ThrottleLimit $ThrottleLimit -UseParallel:$UseParallel -HostNameTargets @($sshTargets.ToArray()) -SshUserName $UserName -SshKeyFilePath $KeyFilePath -SiemFormat $SiemFormat
+            $results = Invoke-FSKRemoteFanout -Targets $targets -CollectorConfig $fskConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $runId -Credential $Credential -ThrottleLimit $ThrottleLimit -UseParallel:$UseParallel -HostNameTargets @($sshTargets.ToArray()) -SshUserName $UserName -SshKeyFilePath $KeyFilePath -SshTargetOptions $sshTargetOptions -SiemFormat $SiemFormat
 
             if ($SiemFormat -eq 'Ndjson' -and $MergeSiem) {
                 try {

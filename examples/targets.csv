@@ -4,6 +4,8 @@
 # - HostName: SSH target (typically Linux/macOS)
 # - OS: Windows | Linux | macOS | Auto
 # - Transport: WinRM | SSH | Auto
+# - UserName: optional SSH username override (empty means no override)
+# - KeyFilePath: optional SSH key path override (empty means no override)
 #
 # Notes:
 # - For SSH targets you must run from PowerShell 7+ and provide -UserName and -KeyFilePath when invoking.

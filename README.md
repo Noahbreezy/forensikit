@@ -49,6 +49,15 @@ CSV can contain mixed OS targets. Supported columns:
 - `OS` (Windows | Linux | macOS | Auto)
 - `Transport` (WinRM | SSH | Auto)
 
+Optional SSH per-target overrides:
+- `UserName` (SSH username override; empty string means no override)
+- `KeyFilePath` (SSH private key path override; empty string means no override)
+
+SSH credential precedence and fallback:
+1) If a CSV row specifies `UserName` and/or `KeyFilePath`, Forensikit attempts those first.
+2) If that attempt fails and you also provided `-UserName` and `-KeyFilePath` on the command, it retries once using the command-level values.
+3) If the CSV override fields are empty/missing, Forensikit uses the command-level `-UserName`/`-KeyFilePath` (existing behavior).
+
 Example file: [examples/targets.csv](examples/targets.csv)
 
 ```powershell
@@ -246,7 +255,7 @@ Export-ForensikitReport -Path .\Output\integration\20251224_174424Z_05fcec0a-fee
 - `-HostName`: SSH remoting targets (PowerShell 7+)
 - `-UserName`: SSH user name (PowerShell 7+)
 - `-KeyFilePath`: SSH private key path (PowerShell 7+)
-- `-ComputerListCsv`: CSV with `ComputerName`
+- `-ComputerListCsv`: CSV with `ComputerName` (WinRM) and/or `HostName` (SSH); optional per-target SSH `UserName`/`KeyFilePath` overrides
 - `-Credential`: credentials for remoting
 - `-ThrottleLimit`: max concurrency (applies to remote fan-out)
 - `-CustomProfilePath`: JSON profile for Custom mode
@@ -316,6 +325,10 @@ Avoid:
 
 - Uses PowerShell SSH remoting: `New-PSSession -HostName -UserName -KeyFilePath`.
 - Authentication is SSH key-based.
+
+CSV override note:
+- For network-wide runs via `-ComputerListCsv`, you may optionally include per-target `UserName` and/or `KeyFilePath` columns.
+- If present, Forensikit tries per-target values first, then falls back to the command-level `-UserName/-KeyFilePath` if provided.
 
 Recommended key handling:
 - Store private keys in your user profile (e.g. `~/.ssh/`) and keep them out of the repo.

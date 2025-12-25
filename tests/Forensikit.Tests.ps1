@@ -105,6 +105,7 @@ Describe 'Forensikit MVP' {
                     $HostNameTargets,
                     $SshUserName,
                     $SshKeyFilePath,
+                    $SshTargetOptions,
                     $SiemFormat
                 )
                 $script:captured = [pscustomobject]@{
@@ -112,6 +113,7 @@ Describe 'Forensikit MVP' {
                     HostNameTargets = @($HostNameTargets)
                     SshUserName = $SshUserName
                     SshKeyFilePath = $SshKeyFilePath
+                    SshTargetOptions = $SshTargetOptions
                     RunId = $RunId
                     SiemFormat = $SiemFormat
                 }
