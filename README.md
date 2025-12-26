@@ -480,3 +480,28 @@ Verb-Noun naming, module layout (Public/Private), comment-based help, and struct
 ### Testing
 
 Pester tests validate key behaviors (folder creation, integrity log, compression).
+
+## References
+
+This project was primarily built using personal knowledge and AI tools, and verified against official documentation.
+
+### Microsoft Learn / PowerShell
+
+- PowerShell Remoting overview (WinRM): https://learn.microsoft.com/powershell/scripting/learn/remoting/overview?view=powershell-7.4
+- PowerShell Remoting over SSH (SSH subsystem): https://learn.microsoft.com/powershell/scripting/learn/remoting/ssh-remoting-in-powershell?view=powershell-7.4
+- about_Remote (remoting fundamentals): https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote?view=powershell-7.4
+- New-PSSession (WinRM/SSH session creation): https://learn.microsoft.com/powershell/module/microsoft.powershell.core/new-pssession?view=powershell-7.4
+- Enable-PSRemoting: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/enable-psremoting?view=powershell-5.1
+- Get-WinEvent: https://learn.microsoft.com/powershell/module/microsoft.powershell.diagnostics/get-winevent?view=powershell-7.4
+
+### Microsoft Learn / Pester
+
+- Pester module docs: https://learn.microsoft.com/powershell/module/pester/?view=pester-5.7
+
+### Scheduling references (per OS)
+
+- Windows Scheduled Tasks (Register-ScheduledTask): https://learn.microsoft.com/powershell/module/scheduledtasks/register-scheduledtask
+- systemd unit files (.service): https://www.freedesktop.org/software/systemd/man/systemd.service.html
+- systemd timers (.timer): https://www.freedesktop.org/software/systemd/man/systemd.timer.html
+- launchd (LaunchAgents) property list format: https://www.manpagez.com/man/5/launchd.plist/
+- OpenSSH sshd_config (Subsystem directive): https://man.openbsd.org/sshd_config
