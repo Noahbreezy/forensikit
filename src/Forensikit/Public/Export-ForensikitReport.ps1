@@ -336,14 +336,11 @@ function Export-ForensikitReport {
         $platforms = @($summaries | Select-Object -ExpandProperty Platform -Unique)
         $hasMixedPlatforms = $platforms.Count -gt 1
 
-        if (-not $hasMixedPlatforms) {
-            $md.Add('## Per-host Overview')
-            $md.Add('')
-        }
+        $isIndividualReport = (Test-Path (Join-Path $InputRoot 'run.json'))
 
         $windowsHosts = @($summaries | Where-Object { $_.Platform -eq 'Windows' } | Sort-Object RunId, Host)
         if ($windowsHosts.Count -gt 0) {
-            $md.Add($(if ($hasMixedPlatforms) { '## Windows Hosts' } else { '## Per-host Overview (Windows)' }))
+            $md.Add($(if ($hasMixedPlatforms) { '## Windows Hosts' } elseif ($isIndividualReport) { '## Overview' } else { '## Per-host Overview' }))
             $md.Add('')
             $md.Add('| RunId | Host | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes | TCP conns | UDP endpoints | Sys events | Sec events | App events |')
             $md.Add('|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
@@ -371,7 +368,7 @@ function Export-ForensikitReport {
 
         $linuxHosts = @($summaries | Where-Object { $_.Platform -eq 'Linux' } | Sort-Object RunId, Host)
         if ($linuxHosts.Count -gt 0) {
-            $md.Add($(if ($hasMixedPlatforms) { '## Linux Hosts' } else { '## Per-host Overview (Linux)' }))
+            $md.Add($(if ($hasMixedPlatforms) { '## Linux Hosts' } elseif ($isIndividualReport) { '## Overview' } else { '## Per-host Overview' }))
             $md.Add('')
             $md.Add('| RunId | Host | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes | ss connections (lines) | ss listen (lines) | journal entries (lines) |')
             $md.Add('|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|')
@@ -397,7 +394,7 @@ function Export-ForensikitReport {
 
         $otherHosts = @($summaries | Where-Object { $_.Platform -ne 'Windows' -and $_.Platform -ne 'Linux' } | Sort-Object Platform, RunId, Host)
         if ($otherHosts.Count -gt 0) {
-            $md.Add('## Other Hosts')
+            $md.Add($(if ($hasMixedPlatforms) { '## Other Hosts' } elseif ($isIndividualReport) { '## Overview' } else { '## Per-host Overview' }))
             $md.Add('')
             $md.Add('| RunId | Host | Platform | Mode | StartedUtc | EndedUtc | WARN | ERROR | Integrity rows | Integrity bytes | Processes |')
             $md.Add('|---|---|---|---|---|---|---:|---:|---:|---:|---:|')
