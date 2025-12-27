@@ -57,10 +57,30 @@ function Invoke-FSKCollectEventLogs {
     # Linux/macOS equivalents (best-effort)
     try {
         $sinceIso = (Get-Date).ToUniversalTime().AddHours(-1 * $hours).ToString('o')
+        # Safety: on small Linux hosts (e.g. 512MB VPS), streaming a large journal through PowerShell can
+        # cause pwsh to be killed by the OOM killer. Cap the output volume and use native redirection.
+        $maxLines = 20000
+
         if ($platform -eq 'Linux' -and (Get-Command journalctl -ErrorAction SilentlyContinue)) {
-            & journalctl --since $sinceIso --no-pager 2>&1 | Out-File -FilePath (Join-Path $outDir 'journalctl_since.txt') -Encoding UTF8
+            $txtPath = Join-Path $outDir 'journalctl_since.txt'
+            $jsonlPath = Join-Path $outDir 'journalctl_since.jsonl'
+
+            $bash = (Get-Command bash -ErrorAction SilentlyContinue).Source
+            if (-not $bash) { $bash = '/bin/bash' }
+
             try {
-                & journalctl --since $sinceIso --no-pager -o json 2>&1 | Out-File -FilePath (Join-Path $outDir 'journalctl_since.jsonl') -Encoding UTF8
+                $cmdTxt = "journalctl --since '$sinceIso' --no-pager | tail -n $maxLines"
+                $txtErr = Join-Path $outDir 'journalctl_since.stderr.txt'
+                Start-Process -FilePath $bash -ArgumentList @('-lc', $cmdTxt) -RedirectStandardOutput $txtPath -RedirectStandardError $txtErr -NoNewWindow -Wait | Out-Null
+            } catch {
+                # Fall back to PowerShell piping if Start-Process or bash isn't available.
+                & journalctl --since $sinceIso --no-pager 2>&1 | Select-Object -First $maxLines | Out-File -FilePath $txtPath -Encoding UTF8
+            }
+
+            try {
+                $cmdJson = "journalctl --since '$sinceIso' --no-pager -o json | tail -n $maxLines"
+                $jsonErr = Join-Path $outDir 'journalctl_since_json.stderr.txt'
+                Start-Process -FilePath $bash -ArgumentList @('-lc', $cmdJson) -RedirectStandardOutput $jsonlPath -RedirectStandardError $jsonErr -NoNewWindow -Wait | Out-Null
             } catch { }
         }
 
@@ -68,7 +88,17 @@ function Invoke-FSKCollectEventLogs {
         foreach ($p in @('/var/log/syslog','/var/log/auth.log','/var/log/messages','/var/log/secure')) {
             if (Test-Path $p) {
                 try {
-                    Get-Content -Path $p -ErrorAction Stop | Out-File -FilePath (Join-Path $outDir (Split-Path $p -Leaf)) -Encoding UTF8
+                    # Cap to the last N lines to avoid copying very large logs on constrained hosts.
+                    $dest = Join-Path $outDir (Split-Path $p -Leaf)
+                    $bash = (Get-Command bash -ErrorAction SilentlyContinue).Source
+                    if (-not $bash) { $bash = '/bin/bash' }
+                    $cmd = "tail -n $maxLines '$p'"
+                    $err = Join-Path $outDir ((Split-Path $p -Leaf) + '.stderr.txt')
+                    try {
+                        Start-Process -FilePath $bash -ArgumentList @('-lc', $cmd) -RedirectStandardOutput $dest -RedirectStandardError $err -NoNewWindow -Wait | Out-Null
+                    } catch {
+                        Get-Content -Path $p -Tail $maxLines -ErrorAction Stop | Out-File -FilePath $dest -Encoding UTF8
+                    }
                 } catch {
                     Write-FSKLog -Logger $Logger -Level WARN -Message "Failed to read log file $p" -Exception $_.Exception
                 }

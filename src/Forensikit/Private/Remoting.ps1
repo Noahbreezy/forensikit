@@ -190,7 +190,7 @@ function Invoke-FSKRemoteSingle {
                     PSEdition = $PSVersionTable.PSEdition
                     Platform  = if ($PSVersionTable.PSVersion.Major -lt 6) { 'Windows' } elseif ($IsWindows) { 'Windows' } elseif ($IsLinux) { 'Linux' } elseif ($IsMacOS) { 'macOS' } else { 'Unknown' }
                 }
-            }
+            } -ErrorAction Stop
 
             # SSH remoting implies PowerShell 6+ on target; still keep guardrails
             if ($Transport -eq 'SSH' -and ([version]$pre.PSVersion).Major -lt 6) {
@@ -200,8 +200,23 @@ function Invoke-FSKRemoteSingle {
             throw
         }
 
-        $remoteBase = Invoke-Command -Session $session -ScriptBlock {
+        $remoteBase = Invoke-Command -Session $session -ErrorAction Stop -ScriptBlock {
+            # Prefer a disk-backed temp directory on Linux/macOS.
+            # Many Linux distros mount /tmp as tmpfs; writing the collection output there can consume RAM
+            # and trigger the OOM killer on small hosts.
             $base = [System.IO.Path]::GetTempPath()
+
+            if (($IsLinux -or $IsMacOS) -and (Test-Path -LiteralPath '/var/tmp')) {
+                try {
+                    $probe = Join-Path '/var/tmp' ("fsk_probe_" + [guid]::NewGuid().ToString())
+                    New-Item -Path $probe -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                    Remove-Item -Path $probe -Recurse -Force -ErrorAction SilentlyContinue
+                    $base = '/var/tmp'
+                } catch {
+                    # If /var/tmp isn't usable, fall back to default temp.
+                }
+            }
+
             $p = Join-Path $base ("Forensikit" + [System.IO.Path]::DirectorySeparatorChar + [guid]::NewGuid().ToString())
             New-Item -Path $p -ItemType Directory -Force | Out-Null
             return $p
@@ -220,9 +235,9 @@ function Invoke-FSKRemoteSingle {
         Invoke-Command -Session $session -ArgumentList @($remoteModule) -ScriptBlock {
             param($remoteModule)
             New-Item -Path $remoteModule -ItemType Directory -Force | Out-Null
-        }
+        } -ErrorAction Stop
 
-        Copy-Item -Path $localModuleContents -Destination $remoteModule -ToSession $session -Recurse -Force
+        Copy-Item -Path $localModuleContents -Destination $remoteModule -ToSession $session -Recurse -Force -ErrorAction Stop
 
         $remoteResult = Invoke-Command -Session $session -ArgumentList @($remoteModule, $CollectorConfig, $remoteBase, $CaseId, $RunId, $SiemFormat, $Transport) -ScriptBlock {
             param($remoteModule, $collectorConfig, $remoteBase, $caseId, $runId, $siemFormat, $transport)
@@ -287,7 +302,7 @@ try {
                 param($collectorConfig, $out, $caseId, $runId, $siemFormat)
                 Invoke-FSKLocalCollection -CollectorConfig $collectorConfig -OutputPath $out -CaseId $caseId -RunId $runId -SiemFormat $siemFormat
             } $collectorConfig $out $caseId $runId $siemFormat
-        }
+        } -ErrorAction Stop
 
         # Be defensive: remoting can occasionally return arrays (multiple pipeline objects) or unexpected shapes.
         # Avoid strict-mode property access on missing members.
@@ -329,14 +344,14 @@ try {
         if (-not (Test-Path $localRunFolder)) { New-Item -Path $localRunFolder -ItemType Directory -Force | Out-Null }
 
         $destZip = Join-Path $localRunFolder (Split-Path $remoteZip -Leaf)
-        Copy-Item -FromSession $session -Path $remoteZip -Destination $destZip -Force
+        Copy-Item -FromSession $session -Path $remoteZip -Destination $destZip -Force -ErrorAction Stop
 
         $destSiem = $null
         if ($remoteSiem) {
             $destSiemDir = Join-Path (Join-Path $localRunFolder $Target) 'siem'
             if (-not (Test-Path $destSiemDir)) { New-Item -Path $destSiemDir -ItemType Directory -Force | Out-Null }
             $destSiem = Join-Path $destSiemDir 'events.ndjson'
-            Copy-Item -FromSession $session -Path $remoteSiem -Destination $destSiem -Force
+            Copy-Item -FromSession $session -Path $remoteSiem -Destination $destSiem -Force -ErrorAction Stop
         }
 
         # Remote runs pull back a ZIP; extract it so the local output layout matches local runs:
@@ -364,12 +379,18 @@ try {
             Extracted = $extracted
             ExtractError = $extractError
         }
+    } catch [System.Management.Automation.Remoting.PSRemotingTransportException] {
+        $msg = $_.Exception.Message
+        if ($Transport -eq 'SSH' -and $msg -match '(?i)SSH transport process has abruptly terminated') {
+            $msg += ' Hint: this commonly happens when the target is out of memory and the Linux OOM killer terminates pwsh. Check dmesg/journalctl for "Out of memory: Killed process" and consider adding swap (or increasing RAM) on the target.'
+        }
+        throw $msg
     } catch {
         throw
     } finally {
         if ($session -and $remoteBase) {
             try {
-                Invoke-Command -Session $session -ArgumentList @($remoteBase) -ScriptBlock { param($p) Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
+                Invoke-Command -Session $session -ArgumentList @($remoteBase) -ScriptBlock { param($p) Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue } -ErrorAction Stop
             } catch { }
         }
         if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
