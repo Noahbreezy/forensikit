@@ -298,4 +298,66 @@ Describe 'Forensikit Unit' -Tag 'Unit' {
             }
         }
     }
+
+    Context 'Remote fan-out result shape' {
+        It 'SSH preflight error objects include RunId' {
+            InModuleScope Forensikit {
+                $cfg = Get-FSKConfig -Mode 'Quick'
+
+                $res = @(Invoke-FSKRemoteFanout -Targets @('ubuntu01') -CollectorConfig $cfg -OutputPath $global:FSK_UnitRoot -RunId 'UNIT_RUN_1' -HostNameTargets @('ubuntu01') -SshUserName '' -SshKeyFilePath '' -UseParallel:$false)
+
+                $res.Count | Should -Be 1
+                $res[0].Computer | Should -Be 'ubuntu01'
+                $res[0].RunId | Should -Be 'UNIT_RUN_1'
+                $res[0].Error | Should -Match 'username'
+            }
+        }
+
+        It 'Sequential fan-out catch objects include RunId' {
+            InModuleScope Forensikit {
+                $cfg = Get-FSKConfig -Mode 'Quick'
+
+                Mock -CommandName Invoke-FSKRemoteSingle -ModuleName Forensikit -MockWith {
+                    param(
+                        [string]$Target,
+                        [string]$Transport,
+                        $CollectorConfig,
+                        [string]$OutputPath,
+                        [string]$CaseId,
+                        [string]$RunId,
+                        [pscredential]$Credential,
+                        [string]$SshUserName,
+                        [string]$SshKeyFilePath,
+                        [string]$TargetSshUserName,
+                        [string]$TargetSshKeyFilePath,
+                        [string]$SiemFormat
+                    )
+
+                    if ($Target -eq 'badhost') { throw 'boom' }
+
+                    [pscustomobject]@{
+                        Computer = $Target
+                        Zip = 'z.zip'
+                        RunId = $RunId
+                        SiemNdjson = $null
+                        RunRoot = 'rr'
+                        Root = 'r'
+                        Extracted = $true
+                        ExtractError = $null
+                    }
+                }
+
+                $res = @(Invoke-FSKRemoteFanout -Targets @('badhost','goodhost') -CollectorConfig $cfg -OutputPath $global:FSK_UnitRoot -RunId 'UNIT_RUN_2' -UseParallel:$false)
+                $res.Count | Should -Be 2
+
+                ($res | Where-Object { $_.Computer -eq 'badhost' }).RunId | Should -Be 'UNIT_RUN_2'
+                ($res | Where-Object { $_.Computer -eq 'badhost' }).Error | Should -Match 'boom'
+
+                $good = ($res | Where-Object { $_.Computer -eq 'goodhost' })
+                $good.RunId | Should -Be 'UNIT_RUN_2'
+                # Success objects do not have an Error property; avoid strict-mode property access.
+                ($good.PSObject.Properties.Name -contains 'Error') | Should -BeFalse
+            }
+        }
+    }
 }

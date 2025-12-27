@@ -289,18 +289,54 @@ try {
             } $collectorConfig $out $caseId $runId $siemFormat
         }
 
-        $localRunFolder = Join-Path $OutputPath $remoteResult.RunId
+        # Be defensive: remoting can occasionally return arrays (multiple pipeline objects) or unexpected shapes.
+        # Avoid strict-mode property access on missing members.
+        $remoteItems = @($remoteResult)
+        $picked = $null
+        foreach ($it in $remoteItems) {
+            if (-not $it) { continue }
+            $hasRunId = ($it.PSObject.Properties.Name -contains 'RunId')
+            $hasZip = ($it.PSObject.Properties.Name -contains 'Zip')
+            if ($hasRunId -and $hasZip) { $picked = $it; break }
+        }
+
+        if (-not $picked) {
+            $types = @(
+                foreach ($it in $remoteItems) {
+                    if ($it) { $it.GetType().FullName } else { '<null>' }
+                }
+            ) | Select-Object -Unique
+
+            $count = $remoteItems.Count
+            $first = @($remoteItems | Where-Object { $_ } | Select-Object -First 1)
+            $firstType = if ($first.Count -gt 0 -and $first[0]) { $first[0].GetType().FullName } else { '<none>' }
+            $preview = $null
+            try {
+                $preview = (@($remoteItems | Select-Object -First 3) | ConvertTo-Json -Depth 6 -Compress)
+            } catch {
+                $preview = '<unserializable>'
+            }
+
+            throw "Remote collection returned an unexpected result (missing RunId/Zip). Count=$count; Types=$($types -join ', '); FirstType=$firstType; Preview=$preview"
+        }
+
+        $remoteRunId = [string]$picked.RunId
+        $remoteZip = [string]$picked.Zip
+        $remoteSiem = $null
+        if ($picked.PSObject.Properties.Name -contains 'SiemNdjson') { $remoteSiem = $picked.SiemNdjson }
+
+        $localRunFolder = Join-Path $OutputPath $remoteRunId
         if (-not (Test-Path $localRunFolder)) { New-Item -Path $localRunFolder -ItemType Directory -Force | Out-Null }
 
-        $destZip = Join-Path $localRunFolder (Split-Path $remoteResult.Zip -Leaf)
-        Copy-Item -FromSession $session -Path $remoteResult.Zip -Destination $destZip -Force
+        $destZip = Join-Path $localRunFolder (Split-Path $remoteZip -Leaf)
+        Copy-Item -FromSession $session -Path $remoteZip -Destination $destZip -Force
 
         $destSiem = $null
-        if ($remoteResult.SiemNdjson) {
+        if ($remoteSiem) {
             $destSiemDir = Join-Path (Join-Path $localRunFolder $Target) 'siem'
             if (-not (Test-Path $destSiemDir)) { New-Item -Path $destSiemDir -ItemType Directory -Force | Out-Null }
             $destSiem = Join-Path $destSiemDir 'events.ndjson'
-            Copy-Item -FromSession $session -Path $remoteResult.SiemNdjson -Destination $destSiem -Force
+            Copy-Item -FromSession $session -Path $remoteSiem -Destination $destSiem -Force
         }
 
         # Remote runs pull back a ZIP; extract it so the local output layout matches local runs:
@@ -321,7 +357,7 @@ try {
         return [pscustomobject]@{
             Computer = $Target
             Zip      = $destZip
-            RunId    = $remoteResult.RunId
+            RunId    = $remoteRunId
             SiemNdjson = $destSiem
             RunRoot  = $localRunFolder
             Root     = $hostFolder
@@ -393,7 +429,17 @@ function Invoke-FSKRemoteFanout {
 
         if ($PSVersionTable.PSVersion.Major -lt 7) {
             foreach ($h in $HostNameTargets) {
-                $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires PowerShell 7+ on the coordinator host' })
+                $results.Add([pscustomobject]@{
+                        Computer = $h
+                        Zip = $null
+                        RunId = $RunId
+                        SiemNdjson = $null
+                        RunRoot = $null
+                        Root = $null
+                        Extracted = $false
+                        ExtractError = $null
+                        Error = 'SSH remoting requires PowerShell 7+ on the coordinator host'
+                    })
             }
             $Targets = @($Targets | Where-Object { $HostNameTargets -notcontains $_ })
         } else {
@@ -412,19 +458,49 @@ function Invoke-FSKRemoteFanout {
                 }
 
                 if (-not $user -or -not $user.Trim()) {
-                    $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires a username (provide -UserName or CSV UserName)' })
+                    $results.Add([pscustomobject]@{
+                            Computer = $h
+                            Zip = $null
+                            RunId = $RunId
+                            SiemNdjson = $null
+                            RunRoot = $null
+                            Root = $null
+                            Extracted = $false
+                            ExtractError = $null
+                            Error = 'SSH remoting requires a username (provide -UserName or CSV UserName)'
+                        })
                     $Targets = @($Targets | Where-Object { $_ -ne $h })
                     continue
                 }
 
                 if (-not $key -or -not $key.Trim()) {
-                    $results.Add([pscustomobject]@{ Computer = $h; Error = 'SSH remoting requires a key file path (provide -KeyFilePath or CSV KeyFilePath)' })
+                    $results.Add([pscustomobject]@{
+                            Computer = $h
+                            Zip = $null
+                            RunId = $RunId
+                            SiemNdjson = $null
+                            RunRoot = $null
+                            Root = $null
+                            Extracted = $false
+                            ExtractError = $null
+                            Error = 'SSH remoting requires a key file path (provide -KeyFilePath or CSV KeyFilePath)'
+                        })
                     $Targets = @($Targets | Where-Object { $_ -ne $h })
                     continue
                 }
 
                 if (-not (Test-Path -LiteralPath $key)) {
-                    $results.Add([pscustomobject]@{ Computer = $h; Error = "SSH key file not found: $key" })
+                    $results.Add([pscustomobject]@{
+                            Computer = $h
+                            Zip = $null
+                            RunId = $RunId
+                            SiemNdjson = $null
+                            RunRoot = $null
+                            Root = $null
+                            Extracted = $false
+                            ExtractError = $null
+                            Error = "SSH key file not found: $key"
+                        })
                     $Targets = @($Targets | Where-Object { $_ -ne $h })
                     continue
                 }
@@ -438,15 +514,16 @@ function Invoke-FSKRemoteFanout {
 
     if ($canParallel) {
         $parallelResults = $Targets | ForEach-Object -Parallel {
+            $target = $_
             try {
                 $mod = Import-Module (Join-Path $using:PSScriptRoot '..\Forensikit.psd1') -Force -PassThru
-                $transport = if ($using:HostNameTargets -and ($using:HostNameTargets -contains $_)) { 'SSH' } else { 'WinRM' }
+                $transport = if ($using:HostNameTargets -and ($using:HostNameTargets -contains $target)) { 'SSH' } else { 'WinRM' }
 
                 $targetUser = $null
                 $targetKey = $null
                 $map = $using:sshOptMap
-                if ($transport -eq 'SSH' -and $map -and $map.ContainsKey($_)) {
-                    $o = $map[$_]
+                if ($transport -eq 'SSH' -and $map -and $map.ContainsKey($target)) {
+                    $o = $map[$target]
                     if ($o -and $o.ContainsKey('UserName')) { $targetUser = [string]$o['UserName'] }
                     if ($o -and $o.ContainsKey('KeyFilePath')) { $targetKey = [string]$o['KeyFilePath'] }
                 }
@@ -467,9 +544,19 @@ function Invoke-FSKRemoteFanout {
                         $SiemFormat
                     )
                     Invoke-FSKRemoteSingle -Target $Target -Transport $Transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -TargetSshUserName $TargetSshUserName -TargetSshKeyFilePath $TargetSshKeyFilePath -SiemFormat $SiemFormat
-                } $_ $transport $using:CollectorConfig $using:OutputPath $using:CaseId $using:RunId $using:Credential $using:SshUserName $using:SshKeyFilePath $targetUser $targetKey $using:SiemFormat
+                } $target $transport $using:CollectorConfig $using:OutputPath $using:CaseId $using:RunId $using:Credential $using:SshUserName $using:SshKeyFilePath $targetUser $targetKey $using:SiemFormat
             } catch {
-                [pscustomobject]@{ Computer = $_; Error = $_.Exception.Message }
+                [pscustomobject]@{
+                    Computer = $target
+                    Zip = $null
+                    RunId = $using:RunId
+                    SiemNdjson = $null
+                    RunRoot = $null
+                    Root = $null
+                    Extracted = $false
+                    ExtractError = $null
+                    Error = $_.Exception.Message
+                }
             }
         } -ThrottleLimit $ThrottleLimit
 
@@ -490,7 +577,17 @@ function Invoke-FSKRemoteFanout {
 
                 $results.Add((Invoke-FSKRemoteSingle -Target $t -Transport $transport -CollectorConfig $CollectorConfig -OutputPath $OutputPath -CaseId $CaseId -RunId $RunId -Credential $Credential -SshUserName $SshUserName -SshKeyFilePath $SshKeyFilePath -TargetSshUserName $targetUser -TargetSshKeyFilePath $targetKey -SiemFormat $SiemFormat))
             } catch {
-                $results.Add([pscustomobject]@{ Computer = $t; Error = $_.Exception.Message })
+                $results.Add([pscustomobject]@{
+                        Computer = $t
+                        Zip = $null
+                        RunId = $RunId
+                        SiemNdjson = $null
+                        RunRoot = $null
+                        Root = $null
+                        Extracted = $false
+                        ExtractError = $null
+                        Error = $_.Exception.Message
+                    })
             }
         }
         $results
