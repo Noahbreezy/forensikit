@@ -13,6 +13,8 @@ Coordinator host note:
 - Forensikit works best when run from PowerShell 7+ (pwsh), including for WinRM.
 - If your environment requires coordinating WinRM from Windows PowerShell 5.1, you can opt in by setting:
 	- `$env:FSK_PREFER_WINPS_FOR_WINRM = '1'`
+	- This only applies to WinRM-only runs (no SSH targets) and is ignored for mixed SSH+WinRM.
+	- This does not enable PowerShell 7+ features like `-UseParallel`.
 
 ## Built-in help
 ```powershell

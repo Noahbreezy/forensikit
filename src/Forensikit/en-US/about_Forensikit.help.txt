@@ -7,9 +7,33 @@ SHORT DESCRIPTION
   remotely (WinRM on Windows; SSH in PowerShell 7+).
 
 LONG DESCRIPTION
-    Forensikit ships as a module with a single public entrypoint: Invoke-ForensicCollector.
+    Forensikit ships as a module with a primary entrypoint: Invoke-ForensicCollector.
     It orchestrates collectors (processes, network, users, event logs), logging, integrity hashing,
     compression, and optional remoting fan-out. Output is structured for ingestion and audit.
+
+WHERE TO START
+    1) Collection entrypoint (start here)
+      Get-Help Invoke-ForensicCollector -Full
+
+    2) Most common workflows
+      - Local collection:
+          Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
+      - Remote collection (WinRM):
+          Invoke-ForensicCollector -Mode Quick -ComputerName PC01 -OutputPath .\Output -Verbose
+      - Remote collection (SSH, PowerShell 7+):
+          Invoke-ForensicCollector -Mode Quick -HostName ubuntu01 -UserName ir -KeyFilePath $HOME\.ssh\id_ed25519 -OutputPath .\Output -Verbose
+
+    3) After collection
+      Get-Help Export-ForensikitReport -Full
+
+    Public commands
+      - Invoke-ForensicCollector: Collect evidence locally or remotely.
+      - Export-ForensikitReport: Build Markdown/HTML reports from collected output.
+      - New-ForensikitCustomProfile: Generate a Custom profile JSON from a built-in mode.
+      - Register-ForensikitSchedule: Register periodic runs from a Custom profile.
+      - Unregister-ForensikitSchedule: Remove a previously registered schedule.
+
+    Tip: Use Get-Help <CommandName> -Full for detailed per-command help.
 
     Key behaviors
       - Creates a run folder per execution: yyyyMMdd_HHmmssZ[ _CaseId ]\<ComputerName>
@@ -26,21 +50,21 @@ SYNTAX
 
 PARAMETERS (high level)
   Mode              Quick, Full, Deep, or Custom profile. Custom requires -CustomProfilePath JSON.
-    OutputPath        Base folder for runs. A time-stamped subfolder is created per target.
-    CaseId            Optional string appended to run/zip names (e.g., incident ID).
+  OutputPath        Base folder for runs. A time-stamped subfolder is created per target.
+  CaseId            Optional string appended to run/zip names (e.g., incident ID).
   ComputerName      Remote Windows computers for WinRM-based PowerShell Remoting collection.
   HostName          PowerShell 7+ only: SSH remoting targets (Linux/macOS/Windows with SSH).
   UserName          PowerShell 7+ only: SSH user name for -HostName remoting.
   KeyFilePath       PowerShell 7+ only: SSH private key path for -HostName remoting.
-    ComputerListCsv   CSV for fan-out; supports mixed OS targets (ComputerName/HostName/OS/Transport).
-    Credential        Credential for remoting; defaults to current user when omitted.
-    ThrottleLimit     Max concurrency for remote fan-out (sequential loop and -UseParallel).
-    CustomProfilePath JSON profile containing Collectors (array) and optional EventLogHours.
-    UseParallel       Use ForEach-Object -Parallel (requires PowerShell 7+) for remote fan-out.
-    SiemFormat        Optional SIEM-oriented output format.
+  ComputerListCsv   CSV for fan-out; supports mixed OS targets (ComputerName/HostName/OS/Transport).
+  Credential        Credential for remoting; defaults to current user when omitted.
+  ThrottleLimit     Max concurrency for remote fan-out (sequential loop and -UseParallel).
+  CustomProfilePath JSON profile containing Collectors (array) and optional EventLogHours.
+  UseParallel       Use ForEach-Object -Parallel (requires PowerShell 7+) for remote fan-out.
+  SiemFormat        Optional SIEM-oriented output format.
              - None: do not write SIEM outputs.
              - Ndjson: write per-host NDJSON/JSONL at <OutputPath>\<RunId>\<ComputerName>\siem\events.ndjson.
-    MergeSiem         When SiemFormat is Ndjson, also write a merged NDJSON file for multi-host runs:
+  MergeSiem         When SiemFormat is Ndjson, also write a merged NDJSON file for multi-host runs:
              <OutputPath>\<RunId>\siem\merged.ndjson (default: true).
 
 MODES AND PROFILES
@@ -92,6 +116,14 @@ PERMISSIONS & PREREQS
   - Remoting (WinRM): ensure WinRM/PowerShell Remoting is enabled and accessible.
   - Remoting (SSH, PowerShell 7+): ensure SSH is reachable and PowerShell is installed on the target (pwsh).
     - Event Logs: Security log often needs elevation; failures are logged as WARN and collection continues.
+
+  Coordinator host note
+    - Forensikit works best when run from PowerShell 7+ (pwsh), including for WinRM.
+    - If your environment requires coordinating WinRM from Windows PowerShell 5.1, you can opt in by setting:
+        $env:FSK_PREFER_WINPS_FOR_WINRM = '1'
+      Notes:
+        - This only applies to WinRM-only runs (no SSH targets) and is ignored for mixed SSH+WinRM.
+        - This does not enable PowerShell 7+ features like -UseParallel.
 
 PERMISSIONS QUICK GUIDE
     General
@@ -145,3 +177,7 @@ TROUBLESHOOTING
 
 SEE ALSO
     Invoke-ForensicCollector
+  Export-ForensikitReport
+  New-ForensikitCustomProfile
+  Register-ForensikitSchedule
+  Unregister-ForensikitSchedule

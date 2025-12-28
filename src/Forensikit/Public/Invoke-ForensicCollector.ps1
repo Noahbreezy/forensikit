@@ -137,6 +137,87 @@ function Invoke-ForensicCollector {
         [bool]$MergeSiem = $true
     )
 
+    # Optional: some environments prefer coordinating WinRM via Windows PowerShell 5.1.
+    # This is opt-in and only applies to WinRM-only runs (no SSH targets) and only when not using -UseParallel.
+    # Enable via: $env:FSK_PREFER_WINPS_FOR_WINRM = '1'
+    if (-not $env:FSK_REEXEC -and $IsWindows -and $PSVersionTable.PSVersion.Major -ge 7 -and $env:FSK_PREFER_WINPS_FOR_WINRM -eq '1') {
+        $sshLikely = $false
+        $winrmLikely = $false
+
+        if ($ComputerName -and $ComputerName.Count -gt 0) { $winrmLikely = $true }
+        if ($HostName -and $HostName.Count -gt 0) { $sshLikely = $true }
+        if ($UserName -or $KeyFilePath) { $sshLikely = $true }
+
+        if ($ComputerListCsv) {
+            try {
+                $head = Get-Content -Path $ComputerListCsv -TotalCount 1 -ErrorAction Stop
+                if ($head -match '(?i)\bHostName\b') { $sshLikely = $true }
+                if ($head -match '(?i)\bComputerName\b') { $winrmLikely = $true }
+
+                if (-not $sshLikely -or -not $winrmLikely) {
+                    $sample = Import-Csv -Path $ComputerListCsv | Select-Object -First 25
+                    foreach ($row in $sample) {
+                        if ($row.HostName) { $sshLikely = $true }
+                        if ($row.ComputerName) { $winrmLikely = $true }
+
+                        if ($row.Transport -and ([string]$row.Transport -match '^(?i)ssh$')) { $sshLikely = $true }
+                        if ($row.Transport -and ([string]$row.Transport -match '^(?i)winrm$')) { $winrmLikely = $true }
+
+                        if ($row.OS -and ([string]$row.OS -match '^(?i)linux|mac(os)?$')) { $sshLikely = $true }
+                        if ($row.OS -and ([string]$row.OS -match '^(?i)windows$')) { $winrmLikely = $true }
+
+                        if ($sshLikely -and $winrmLikely) { break }
+                    }
+                }
+            } catch {
+                # If we can't inspect the CSV, don't force re-exec here; downstream remoting will handle it.
+            }
+        }
+
+        if ($winrmLikely -and -not $sshLikely -and -not $UseParallel) {
+            $winPsPath = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+            if (-not $winPsPath) {
+                throw "FSK_PREFER_WINPS_FOR_WINRM=1 was set, but powershell.exe was not found on PATH."
+            }
+
+            $env:FSK_REEXEC = '1'
+
+            $credentialPath = $null
+            $bound = @{} + $PSBoundParameters
+            try {
+                if ($bound.ContainsKey('Credential') -and $bound.Credential) {
+                    $credentialPath = Join-Path $env:TEMP ("fsk_cred_" + [guid]::NewGuid().ToString() + '.clixml')
+                    $bound.Credential | Export-Clixml -Path $credentialPath -Force
+                    $bound.Remove('Credential')
+                    $bound.__FSKCredentialPath = $credentialPath
+                }
+
+                $moduleManifest = (Resolve-Path (Join-Path $PSScriptRoot '..\Forensikit.psd1')).Path
+                $moduleManifestEscaped = $moduleManifest.Replace("'","''")
+                $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($bound | ConvertTo-Json -Depth 8 -Compress)))
+
+                $cmd = @"
+`$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$payload'))
+`$obj = `$json | ConvertFrom-Json
+`$params = @{}
+foreach (`$p in `$obj.PSObject.Properties) { `$params[`$p.Name] = `$p.Value }
+if (`$params.ContainsKey('__FSKCredentialPath')) {
+    `$params.Credential = Import-Clixml -Path `$params.__FSKCredentialPath
+    `$params.Remove('__FSKCredentialPath')
+}
+Import-Module '$moduleManifestEscaped' -Force
+Invoke-ForensicCollector @params
+"@
+
+                return & $winPsPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $cmd
+            } finally {
+                if ($credentialPath) {
+                    Remove-Item -Path $credentialPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
     # If SSH targets are present and we're running under Windows PowerShell 5.1, automatically
     # re-execute the command under PowerShell 7+ (pwsh). This allows a single entrypoint to
     # “pick the right host” based on remoting transport.
