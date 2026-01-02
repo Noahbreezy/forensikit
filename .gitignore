@@ -11,3 +11,7 @@ Thumbs.db
 
 spam/
 testResults.xml
+
+# Release packaging output
+release/
+testResults.xml

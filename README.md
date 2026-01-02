@@ -22,13 +22,59 @@ Get-Help Invoke-ForensicCollector -Full
 Get-Help about_Forensikit
 ```
 
-## Quick start (local)
+## Quick start (dev from repo)
 
 ```powershell
 # From repo root
 Import-Module .\src\Forensikit\Forensikit.psd1 -Force
 Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
 ```
+
+## Quick start (from release ZIP)
+
+The project deliverable is a single PowerShell module folder packaged as a ZIP.
+After extracting `Forensikit.zip`, you should have a `Forensikit\` folder containing `Forensikit.psd1` and `Forensikit.psm1`.
+
+Option A: import directly from the extracted folder (no install required):
+
+```powershell
+# From the folder where you extracted the ZIP
+Import-Module .\Forensikit\Forensikit.psd1 -Force
+Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
+```
+
+Option B: install for the current user (adds it to your module path):
+
+```powershell
+$moduleName = 'Forensikit'
+
+if ($IsWindows) {
+	$destRoot = Join-Path $HOME 'Documents\PowerShell\Modules'
+} else {
+	$destRoot = Join-Path $HOME '.local/share/powershell/Modules'
+}
+
+$dest = Join-Path $destRoot $moduleName
+New-Item -ItemType Directory -Force -Path $destRoot | Out-Null
+
+# Assuming the extracted folder contains .\Forensikit\...
+Copy-Item -Recurse -Force .\Forensikit $dest
+
+Import-Module Forensikit -Force
+Invoke-ForensicCollector -Mode Quick -OutputPath .\Output -Verbose
+```
+
+## Release (ZIP for submission)
+
+Build a clean module-only ZIP under `release\`:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\Build-Release.ps1
+```
+
+This produces:
+- `release\Forensikit.zip` (submission artifact)
+- `release\Forensikit\` (expanded module folder used to create the ZIP)
 
 ## Modes
 - Quick: processes, network, users, event logs (last 24h).
