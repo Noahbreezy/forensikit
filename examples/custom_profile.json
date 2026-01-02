@@ -1,4 +1,20 @@
-{
-  "Collectors": ["Processes", "Network", "Users", "EventLogs"],
-  "EventLogHours": 48
-}
+[
+  {
+    "Collectors": ["Processes", "Network", "Users", "EventLogs"],
+    "EventLogHours": 48
+  },
+  {
+    "Collectors": [
+      "Processes",
+      "Network",
+      "Users",
+      "EventLogs",
+      "Services",
+      "ScheduledTasks",
+      "Registry",
+      "InstalledSoftware",
+      "DnsFirewall"
+    ],
+    "EventLogHours": 336
+  }
+]
