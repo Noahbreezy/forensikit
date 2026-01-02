@@ -59,6 +59,7 @@ function Invoke-ForensicCollector {
         .PARAMETER MergeSiem
         When SiemFormat is Ndjson and multiple targets are collected in one invocation, also writes a merged NDJSON
         file at <OutputPath>\<RunId>\siem\merged.ndjson by concatenating per-host events.ndjson files.
+        Defaults to enabled. To disable, pass: -MergeSiem:$false
 
     .OUTPUTS
     PSCustomObject per target with RunId/Root/Zip/Log when run locally; remote fan-out returns an array of results or error objects.
@@ -134,8 +135,14 @@ function Invoke-ForensicCollector {
         [string]$SiemFormat = 'None',
 
         [Parameter()]
-        [bool]$MergeSiem = $true
+        [switch]$MergeSiem
     )
+
+    # Default behavior: merge per-host NDJSON into a single merged NDJSON for multi-target runs.
+    # Users can disable via: -MergeSiem:$false
+    if (-not $PSBoundParameters.ContainsKey('MergeSiem')) {
+        $MergeSiem = $true
+    }
 
     # Optional: some environments prefer coordinating WinRM via Windows PowerShell 5.1.
     # This is opt-in and only applies to WinRM-only runs (no SSH targets) and only when not using -UseParallel.

@@ -113,16 +113,32 @@ function Register-ForensikitSchedule {
     switch ($platform) {
         'Windows' {
             $taskName = $null
-            if ($spec.Type -eq 'Interval') {
-                $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -Every $spec.Every -StartAt $spec.StartAt -RunElevated:$RunElevated
-            } elseif ($spec.Type -eq 'Weekly') {
-                $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -DaysOfWeek $spec.DaysOfWeek -At $spec.At -RunElevated:$RunElevated
-            } elseif ($spec.Type -eq 'Monthly') {
-                $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -DaysOfMonth $spec.DaysOfMonth -AtMonthly $spec.At -RunElevated:$RunElevated
-            } else {
-                throw "Unsupported schedule type: $($spec.Type)"
+            try {
+                if ($spec.Type -eq 'Interval') {
+                    $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -Every $spec.Every -StartAt $spec.StartAt -RunElevated:$RunElevated -ErrorAction Stop
+                } elseif ($spec.Type -eq 'Weekly') {
+                    $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -DaysOfWeek $spec.DaysOfWeek -At $spec.At -RunElevated:$RunElevated -ErrorAction Stop
+                } elseif ($spec.Type -eq 'Monthly') {
+                    $taskName = Register-FSKWindowsScheduledTask -Name $Name -RunnerScript $runner.RunnerScript -DaysOfMonth $spec.DaysOfMonth -AtMonthly $spec.At -RunElevated:$RunElevated -ErrorAction Stop
+                } else {
+                    throw "Unsupported schedule type: $($spec.Type)"
+                }
+
+                if ($taskName) {
+                    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                    if ($task) {
+                        $result.Registered = $true
+                    } else {
+                        $result.Notes += "Task registration did not produce a task named '$taskName'."
+                    }
+                } else {
+                    $result.Notes += 'Task registration was skipped (ShouldProcess returned false).'
+                }
+            } catch {
+                $result.Registered = $false
+                $result.Notes += "Failed to register Windows Scheduled Task: $($_.Exception.Message)"
             }
-            $result.Registered = $true
+
             $result.Details = [pscustomobject]@{ ScheduledTask = $taskName; Spec = $spec }
         }
 

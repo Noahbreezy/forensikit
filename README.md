@@ -173,37 +173,43 @@ Register a schedule that runs the profile on an interval:
 ```powershell
 Import-Module .\src\Forensikit\Forensikit.psd1 -Force
 
-Register-ForensikitSchedule \
-	-Name deepEvery6h \
-	-CustomProfilePath .\deep_profile.json \
-	-Every (New-TimeSpan -Hours 6) \
-	-OutputPath .\Output \
-	-CopyProfile \
-	-SiemFormat None
+$params = @{
+	Name = 'deepEvery6h'
+	CustomProfilePath = '.\deep_profile.json'
+	Every = (New-TimeSpan -Hours 6)
+	OutputPath = '.\Output'
+	CopyProfile = $true
+	SiemFormat = 'None'
+}
+Register-ForensikitSchedule @params
 ```
 
 Weekly example (every Sunday at 23:59):
 
 ```powershell
-Register-ForensikitSchedule \
-	-Name weeklySunday \
-	-CustomProfilePath .\deep_profile.json \
-	-DaysOfWeek Sunday \
-	-At (New-TimeSpan -Hours 23 -Minutes 59) \
-	-OutputPath .\Output \
-	-CopyProfile
+$params = @{
+	Name = 'weeklySunday'
+	CustomProfilePath = '.\deep_profile.json'
+	DaysOfWeek = 'Sunday'
+	At = (New-TimeSpan -Hours 23 -Minutes 59)
+	OutputPath = '.\Output'
+	CopyProfile = $true
+}
+Register-ForensikitSchedule @params
 ```
 
 Monthly example (every 15th day at 12:00):
 
 ```powershell
-Register-ForensikitSchedule \
-	-Name monthly15th \
-	-CustomProfilePath .\deep_profile.json \
-	-DaysOfMonth 15 \
-	-AtMonthly (New-TimeSpan -Hours 12) \
-	-OutputPath .\Output \
-	-CopyProfile
+$params = @{
+	Name = 'monthly15th'
+	CustomProfilePath = '.\deep_profile.json'
+	DaysOfMonth = 15
+	AtMonthly = (New-TimeSpan -Hours 12)
+	OutputPath = '.\Output'
+	CopyProfile = $true
+}
+Register-ForensikitSchedule @params
 ```
 
 Notes:
@@ -309,7 +315,7 @@ Export-ForensikitReport -Path .\Output\integration\20251224_174424Z_05fcec0a-fee
 - `-CustomProfilePath`: JSON profile for Custom mode
 - `-UseParallel`: enable PowerShell 7+ parallel fan-out
 - `-SiemFormat`: None | Ndjson (writes NDJSON/JSONL under each host folder)
-- `-MergeSiem`: when using `-SiemFormat Ndjson`, also writes `siem\merged.ndjson` under the run folder (default: true)
+- `-MergeSiem`: when using `-SiemFormat Ndjson` on **multi-target** runs, also writes `siem\merged.ndjson` under the run folder (default: enabled; disable with `-MergeSiem:$false`)
 
 ## SIEM output (NDJSON/JSONL)
 

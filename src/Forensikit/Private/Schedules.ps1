@@ -35,6 +35,43 @@ function ConvertTo-FSKTimeString {
     return ([datetime]::Today.Add($At)).ToString('HH:mm:ss')
 }
 
+function ConvertTo-FSKTaskSchedulerDuration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [TimeSpan]$TimeSpan
+    )
+
+    # Task Scheduler expects ISO-8601 durations (PT6H, PT90M, P1D, etc.) in task XML.
+    $totalSeconds = [int][Math]::Round($TimeSpan.TotalSeconds)
+    if ($totalSeconds -le 0) {
+        throw 'Duration must be greater than zero'
+    }
+
+    $days = [int][Math]::Floor($totalSeconds / 86400)
+    $rem = $totalSeconds % 86400
+    $hours = [int][Math]::Floor($rem / 3600)
+    $rem = $rem % 3600
+    $minutes = [int][Math]::Floor($rem / 60)
+    $seconds = [int]($rem % 60)
+
+    $datePart = if ($days -gt 0) { "P${days}D" } else { 'P' }
+    $timeParts = @()
+    if ($hours -gt 0) { $timeParts += "${hours}H" }
+    if ($minutes -gt 0) { $timeParts += "${minutes}M" }
+    if ($seconds -gt 0) { $timeParts += "${seconds}S" }
+
+    if ($days -gt 0 -and $timeParts.Count -eq 0) {
+        return $datePart
+    }
+
+    if ($timeParts.Count -eq 0) {
+        $timeParts = @('0S')
+    }
+
+    return ("$datePart" + 'T' + ($timeParts -join ''))
+}
+
 function Get-FSKScheduleRoot {
     [CmdletBinding()]
     param()
@@ -201,25 +238,6 @@ function Register-FSKWindowsScheduledTask {
     $taskArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$RunnerScript`""
     $action = New-ScheduledTaskAction -Execute $exe -Argument $taskArgs
 
-    $trigger = $null
-    switch ($PSCmdlet.ParameterSetName) {
-        'Interval' {
-            # Create a "run once" trigger then repeat forever.
-            $trigger = New-ScheduledTaskTrigger -Once -At $StartAt -RepetitionInterval $Every -RepetitionDuration ([TimeSpan]::MaxValue)
-        }
-        'Weekly' {
-            $dt = [datetime]::Today.Add($At)
-            $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DaysOfWeek -At $dt
-        }
-        'Monthly' {
-            $dt = [datetime]::Today.Add($AtMonthly)
-            $trigger = New-ScheduledTaskTrigger -Monthly -DaysOfMonth $DaysOfMonth -At $dt
-        }
-        default {
-            throw "Unknown trigger type: $($PSCmdlet.ParameterSetName)"
-        }
-    }
-
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
     $principal = $null
@@ -227,11 +245,102 @@ function Register-FSKWindowsScheduledTask {
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType InteractiveToken -RunLevel Highest
     }
 
+    $registerXml = $null
+
+    $trigger = $null
+    switch ($PSCmdlet.ParameterSetName) {
+        'Interval' {
+            # Use a daily trigger with repetition to avoid invalid Task Scheduler XML durations.
+            # Note: Scheduled Tasks doesn't accept an "infinite" repetition duration; daily+duration=1 day repeats indefinitely.
+            if ($Every.TotalSeconds -lt 60) {
+                throw "Every must be at least 60 seconds on Windows"
+            }
+
+            if ($Every.TotalDays -ge 1) {
+                $wholeDays = [Math]::Round($Every.TotalDays, 0)
+                if ([Math]::Abs($Every.TotalDays - $wholeDays) -gt 1e-9) {
+                    throw "On Windows, interval schedules >= 1 day must be whole-day increments (e.g. 24h, 48h)."
+                }
+
+                $daysInterval = [uint][Math]::Max(1, [int]$wholeDays)
+                $trigger = New-ScheduledTaskTrigger -Daily -At $StartAt -DaysInterval $daysInterval
+            } else {
+                $trigger = New-ScheduledTaskTrigger -Daily -At $StartAt -DaysInterval 1
+
+                $repClass = Get-CimClass -Namespace Root/Microsoft/Windows/TaskScheduler -ClassName MSFT_TaskRepetitionPattern
+                $rep = New-CimInstance -CimClass $repClass -ClientOnly -Property @{
+                    Interval = (ConvertTo-FSKTaskSchedulerDuration -TimeSpan $Every)
+                    Duration = 'P1D'
+                    StopAtDurationEnd = $false
+                }
+                $trigger.Repetition = $rep
+            }
+        }
+        'Weekly' {
+            $dt = [datetime]::Today.Add($At)
+            $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DaysOfWeek -At $dt
+        }
+        'Monthly' {
+            # ScheduledTasks doesn't expose -Monthly on all Windows versions.
+            # Build the task XML with a monthly CalendarTrigger, then register via -Xml.
+            $now = Get-Date
+            $start = [datetime]::Today.Add($AtMonthly)
+            if ($start -lt $now.AddMinutes(1)) {
+                $start = $now.AddMinutes(1)
+            }
+
+            $days = @($DaysOfMonth | Sort-Object -Unique)
+            if ($days.Count -lt 1) {
+                throw "DaysOfMonth must include at least one day"
+            }
+
+            $months = @(
+                'January','February','March','April','May','June',
+                'July','August','September','October','November','December'
+            )
+
+            $dayXml = foreach ($d in $days) { "        <Day>$d</Day>" }
+            $monthXml = foreach ($m in $months) { "        <$m />" }
+
+            $triggersXml = @(
+                '<Triggers>',
+                '  <CalendarTrigger>',
+                "    <StartBoundary>$($start.ToString('s'))</StartBoundary>",
+                '    <Enabled>true</Enabled>',
+                '    <ScheduleByMonth>',
+                '      <DaysOfMonth>',
+                ($dayXml -join "`n"),
+                '      </DaysOfMonth>',
+                '      <Months>',
+                ($monthXml -join "`n"),
+                '      </Months>',
+                '    </ScheduleByMonth>',
+                '  </CalendarTrigger>',
+                '</Triggers>'
+            ) -join "`n"
+
+            $dummy = New-ScheduledTaskTrigger -Once -At $start
+            $task = if ($principal) {
+                New-ScheduledTask -Action $action -Trigger $dummy -Settings $settings -Principal $principal
+            } else {
+                New-ScheduledTask -Action $action -Trigger $dummy -Settings $settings
+            }
+
+            $xml = Export-ScheduledTask -InputObject $task
+            $registerXml = [regex]::Replace($xml, '<Triggers>[\s\S]*?</Triggers>', $triggersXml)
+        }
+        default {
+            throw "Unknown trigger type: $($PSCmdlet.ParameterSetName)"
+        }
+    }
+
     if ($PSCmdlet.ShouldProcess($taskName, "Register Scheduled Task")) {
-        if ($principal) {
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+        if ($registerXml) {
+            Register-ScheduledTask -TaskName $taskName -Xml $registerXml -Force -ErrorAction Stop | Out-Null
+        } elseif ($principal) {
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
         } else {
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop | Out-Null
         }
 
         return $taskName

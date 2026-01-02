@@ -65,7 +65,7 @@ PARAMETERS (high level)
              - None: do not write SIEM outputs.
              - Ndjson: write per-host NDJSON/JSONL at <OutputPath>\<RunId>\<ComputerName>\siem\events.ndjson.
   MergeSiem         When SiemFormat is Ndjson, also write a merged NDJSON file for multi-host runs:
-             <OutputPath>\<RunId>\siem\merged.ndjson (default: true).
+             <OutputPath>\<RunId>\siem\merged.ndjson (default: enabled; disable with -MergeSiem:$false).
 
 MODES AND PROFILES
     Quick: Collectors = Processes, Network, Users, EventLogs; EventLogHours = 24.
