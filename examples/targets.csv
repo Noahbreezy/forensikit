@@ -10,6 +10,7 @@
 # Notes:
 # - For SSH targets you must run from PowerShell 7+ and provide -UserName and -KeyFilePath when invoking.
 # - If Transport is Auto, the tool uses OS to decide (Windows=WinRM, Linux/macOS=SSH).
+# DO NOT LEAVE the # HEADER LINEs in the actual CSV file!
 
 ComputerName,HostName,OS,Transport
 PC01,,Windows,Auto
