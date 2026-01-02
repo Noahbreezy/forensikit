@@ -260,7 +260,10 @@ Output\20251215_224654Z\MERCURY_20251215_224654Z.zip
 
 Pester test runs can emit an NUnit-style XML report for CI consumption. To keep these artifacts untracked, write them under `artifacts\test-results\`:
 
-`pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module Pester -RequiredVersion 5.7.1 -Force; New-Item -ItemType Directory -Force -Path .\artifacts\test-results | Out-Null; $config = New-PesterConfiguration; $config.Run.Path = '.\tests'; $config.Output.Verbosity = 'Detailed'; $config.TestResult.Enabled = $true; $config.TestResult.OutputFormat = 'NUnitXml'; $config.TestResult.OutputPath = '.\artifacts\test-results\testResults.xml'; Invoke-Pester -Configuration $config"`
+```powershell
+# Use single quotes for -Command so $config isn't expanded by the parent PowerShell.
+pwsh -NoProfile -ExecutionPolicy Bypass -Command 'Import-Module Pester -RequiredVersion 5.7.1 -Force; New-Item -ItemType Directory -Force -Path .\artifacts\test-results | Out-Null; $config = New-PesterConfiguration; $config.Run.Path = ".\tests"; $config.Output.Verbosity = "Detailed"; $config.TestResult.Enabled = $true; $config.TestResult.OutputFormat = "NUnitXml"; $config.TestResult.OutputPath = ".\artifacts\test-results\testResults.xml"; Invoke-Pester -Configuration $config'
+```
 
 If SIEM output is enabled for a multi-host run, a merged file is also produced:
 ```
