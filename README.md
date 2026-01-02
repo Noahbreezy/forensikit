@@ -1,4 +1,4 @@
-# Forensikit (MVP)
+# Forensikit 
 
 PowerShell-based evidence collection for incident response.
 
