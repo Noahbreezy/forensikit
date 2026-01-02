@@ -47,7 +47,11 @@ function Get-FSKConfig {
             if ($null -eq $obj.EventLogHours) {
                 $obj | Add-Member -NotePropertyName EventLogHours -NotePropertyValue 24
             }
-            $obj.Mode = 'Custom'
+            if (-not $obj.PSObject.Properties['Mode']) {
+                $obj | Add-Member -NotePropertyName Mode -NotePropertyValue 'Custom'
+            } else {
+                $obj.Mode = 'Custom'
+            }
             return $obj
         }
     }
