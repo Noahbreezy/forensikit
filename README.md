@@ -1,6 +1,6 @@
 # Forensikit 
 
-PowerShell-based evidence collection for incident response.
+PowerShell-based evidence collection for incident response made by Noah da Silveira.
 
 ## Requirements
 - Windows, Linux, or macOS.
